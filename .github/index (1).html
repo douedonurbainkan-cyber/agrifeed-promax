@@ -1,0 +1,2047 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<meta name="theme-color" content="#0d2b0d"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="AgriFeed Pro"/>
+<link rel="manifest" id="pwa-manifest"/>
+<script>
+// Créer une icône PNG via Canvas
+function createAppIcon(size) {
+  var canvas = document.createElement("canvas");
+  canvas.width = size; canvas.height = size;
+  var ctx = canvas.getContext("2d");
+  // Fond vert foncé arrondi
+  var r = size * 0.22;
+  ctx.beginPath();
+  ctx.moveTo(r, 0); ctx.lineTo(size-r, 0);
+  ctx.quadraticCurveTo(size, 0, size, r);
+  ctx.lineTo(size, size-r);
+  ctx.quadraticCurveTo(size, size, size-r, size);
+  ctx.lineTo(r, size); ctx.quadraticCurveTo(0, size, 0, size-r);
+  ctx.lineTo(0, r); ctx.quadraticCurveTo(0, 0, r, 0);
+  ctx.closePath();
+  var grad = ctx.createLinearGradient(0,0,size,size);
+  grad.addColorStop(0, "#0d2b0d");
+  grad.addColorStop(1, "#2d6e2d");
+  ctx.fillStyle = grad;
+  ctx.fill();
+  // Épi de blé
+  ctx.font = (size*0.62)+"px serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("🌾", size/2, size/2);
+  return canvas.toDataURL("image/png");
+}
+
+// Générer les icônes et créer le manifest
+window.addEventListener("DOMContentLoaded", function() {
+  var icon192 = createAppIcon(192);
+  var icon512 = createAppIcon(512);
+  var manifest = {
+    name: "AgriFeed Pro",
+    short_name: "AgriFeed",
+    description: "Gestion de moulin d'aliments pour animaux",
+    start_url: "./",
+    display: "standalone",
+    background_color: "#0d2b0d",
+    theme_color: "#0d2b0d",
+    orientation: "portrait",
+    icons: [
+      {src: icon192, sizes: "192x192", type: "image/png", purpose: "any maskable"},
+      {src: icon512, sizes: "512x512", type: "image/png", purpose: "any maskable"}
+    ]
+  };
+  var blob = new Blob([JSON.stringify(manifest)], {type:"application/json"});
+  var url = URL.createObjectURL(blob);
+  document.getElementById("pwa-manifest").href = url;
+});
+</script>
+<title>AgriFeed Pro</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<script>
+var db = null;
+try {
+  if(!firebase.apps.length) {
+    firebase.initializeApp({
+      apiKey: "AIzaSyBLqIx_9fAA-PaS3DBD34ZgaSvxlmolSzY",
+      authDomain: "agrifeed-moulin.firebaseapp.com",
+      projectId: "agrifeed-moulin",
+      storageBucket: "agrifeed-moulin.firebasestorage.app",
+      messagingSenderId: "610824549039",
+      appId: "1:610824549039:web:06e50860aa862c81cf1a5a"
+    });
+  }
+  db = firebase.firestore();
+  console.log("✅ Firebase connecté");
+} catch(e) {
+  console.warn("Firebase non disponible:", e);
+  db = null;
+}
+</script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',Tahoma,sans-serif;background:#f0f4f0}
+input,textarea,select,button{font-family:inherit}
+::-webkit-scrollbar{width:6px}
+::-webkit-scrollbar-thumb{background:#2d6e2d;border-radius:3px}
+table{border-collapse:collapse;width:100%}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState, useEffect} = React;
+
+// ─── DONNÉES ──────────────────────────────────────────────────
+const initMats = [
+  {id:"mais",      nom:"Maïs",          u:"kg",  p:150},
+  {id:"soja",      nom:"Soja",           u:"kg",  p:300},
+  {id:"coton",     nom:"Coton",          u:"kg",  p:200},
+  {id:"pnh_chair", nom:"PNH Chair",      u:"kg",  p:800},
+  {id:"pnh_ponte", nom:"PNH Ponte",      u:"kg",  p:850},
+  {id:"coquillage",nom:"Coquillages",    u:"kg",  p:150},
+  {id:"poisson",   nom:"Farine Poisson", u:"kg",  p:500},
+  {id:"sel",       nom:"Sel",            u:"kg",  p:100},
+  {id:"son_ble",   nom:"Son de Blé",     u:"kg",  p:120},
+  {id:"son_riz",   nom:"Son de Riz",     u:"kg",  p:100},
+  {id:"palmiste",  nom:"Palmiste",       u:"kg",  p:180},
+  {id:"huile",     nom:"Huile Rouge",    u:"kg",  p:900},
+  {id:"sac",       nom:"Sac (50kg)",     u:"pce", p:350},
+];
+
+const FMLS = [
+  {id:"chair_dem",nom:"Poulet Chair — Démarrage", phase:"Démarrage (0-3 sem.)", e:"🐥",c:"#F59E0B",bg:"#FEF3C7",compo:{mais:27.5,soja:15,pnh_chair:2.5,poisson:1.5,huile:1.5,son_ble:1,sel:0.25,sac:1}},
+  {id:"chair_cro",nom:"Poulet Chair — Croissance",phase:"Croissance (3-6 sem.)",e:"🐔",c:"#EA580C",bg:"#FFEDD5",compo:{mais:30,soja:12.5,pnh_chair:2,son_ble:2.5,huile:1.5,poisson:1,sel:0.25,sac:1}},
+  {id:"chair_fin",nom:"Poulet Chair — Finition",  phase:"Finition (6-8 sem.)",  e:"🍗",c:"#DC2626",bg:"#FEE2E2",compo:{mais:32.5,soja:10,son_ble:3.5,palmiste:1.5,huile:1,pnh_chair:1,sel:0.25,sac:1}},
+  {id:"pondeuse", nom:"Poule Pondeuse",            phase:"Production",           e:"🥚",c:"#7C3AED",bg:"#EDE9FE",compo:{mais:27.5,soja:10,coquillage:4,son_ble:4,pnh_ponte:2,poisson:1,sel:0.25,son_riz:1,sac:1}},
+  {id:"porc",     nom:"Aliment Porc",              phase:"Croissance/Finition",  e:"🐷",c:"#DB2777",bg:"#FCE7F3",compo:{mais:25,soja:10,son_ble:7.5,son_riz:2.5,palmiste:2.5,coton:1.5,sel:0.25,sac:1}},
+];
+
+const ING_LIST = ["Maïs","Soja","Coton","PNH Chair","PNH Ponte","Coquillages","Farine de Poisson","Sel","Son de Blé","Son de Riz","Palmiste","Huile Rouge","Lysine","Méthionine","Prémix Vitaminé","Broyage","Transport","Main d'oeuvre","Conditionnement","Autre"];
+const UNITES   = ["kg","g","litre","sac","pce","%","prestation"];
+
+const ST = {
+  en_attente:    {label:"En attente",    icon:"⏳", color:"#D97706", bg:"#FEF3C7"},
+  en_production: {label:"En production", icon:"⚙️",  color:"#2563EB", bg:"#DBEAFE"},
+  pret:          {label:"Prêt",          icon:"✅", color:"#059669", bg:"#D1FAE5"},
+  livre:         {label:"Livré",         icon:"🚚", color:"#6B7280", bg:"#F3F4F6"},
+  annulee:       {label:"Annulée",       icon:"✕",  color:"#EF4444", bg:"#FEE2E2"},
+};
+const NEXT = {en_attente:"en_production", en_production:"pret", pret:"livre"};
+
+const ST_FC = {
+  en_attente: {label:"Nouveau",       icon:"🔬", color:"#7C3AED", bg:"#EDE9FE"},
+  en_cours:   {label:"En production", icon:"⚙️",  color:"#2563EB", bg:"#DBEAFE"},
+  termine:    {label:"Terminé",       icon:"✅", color:"#059669", bg:"#D1FAE5"},
+};
+
+// ─── HELPERS ──────────────────────────────────────────────────
+const fmt     = n => Math.round(n).toLocaleString("fr-FR") + " FCFA";
+const today   = () => new Date().toLocaleDateString("fr-FR");
+const calcP   = (f, mats, cFmls) => {
+  const mp = Object.fromEntries(mats.map(m=>[m.id,m.p]));
+  var compo = (cFmls && cFmls[f.id] && cFmls[f.id].compo) ? cFmls[f.id].compo : f.compo;
+  return Object.entries(compo).reduce((t,[id,q])=>t+(mp[id]||0)*q, 0);
+};
+const lsGet   = (k,d) => { try { const v=localStorage.getItem(k); return v?JSON.parse(v):d; } catch(e) { return d; } };
+const lsSet   = (k,v) => { try { localStorage.setItem(k,JSON.stringify(v)); } catch(e) {} };
+const calcDevis = ings => ings.reduce((t,x) => { const q=parseFloat(x.qte)||0, p=parseFloat(x.pu)||0; return t+q*p; }, 0);
+const emptyIng  = () => ({nom:"", qte:"", pu:"", u:"kg"});
+let cN = 2;
+
+// ─── FIREBASE SAFE WRAPPERS ────────────────────────────────────
+function fbSave(col, id, data) {
+  if(!db) return;
+  try { db.collection(col).doc(id).set(data); } catch(e) { console.warn(e); }
+}
+function fbUpdate(col, id, data) {
+  if(!db) return;
+  try { db.collection(col).doc(id).update(data).catch(function(){ db.collection(col).doc(id).set(data); }); } catch(e) { console.warn(e); }
+}
+
+// ─── EXCEL ────────────────────────────────────────────────────
+function dlExcel(mats, orders, nom, ville) {
+  const X = window.XLSX;
+  const wb = X.utils.book_new();
+  const d = today();
+
+  const r1 = [[nom+" — Calculateur | "+d],[],["PRIX MATIÈRES"],["Matière","Unité","Prix FCFA"]];
+  mats.forEach(m => r1.push([m.nom,"/"+m.u,m.p]));
+  r1.push([]);
+  FMLS.forEach(f => {
+    const ps = Math.round(calcP(f,mats,customFmls));
+    r1.push([f.e+" "+f.nom],["Ingrédient","Qté/sac","Prix","Coût/sac","%"]);
+    Object.entries(f.compo).forEach(([id,qty]) => {
+      const m = mats.find(m=>m.id===id); if(!m) return;
+      const cs = Math.round(qty*m.p);
+      r1.push([m.nom, qty, m.p, cs, ps>0?(cs/ps*100).toFixed(1)+"%":""]);
+    });
+    r1.push(["TOTAL/SAC","","",ps,"100%"]); r1.push([]);
+  });
+  const ws1 = X.utils.aoa_to_sheet(r1);
+  ws1["!cols"] = [{wch:26},{wch:10},{wch:14},{wch:16},{wch:8}];
+  X.utils.book_append_sheet(wb, ws1, "Calcul Aliments");
+
+  const cj = orders.filter(o=>o.date===today());
+  const r2 = [[nom+" — Journal | "+d],["Ville:"+(ville||"—"),"","Employé: ___"],[],
+    ["N°","Heure","Client","Tél","Aliment","Sacs","Poids","Prix/sac","Montant","Statut","Note"]];
+  cj.forEach((o,i) => { const f=FMLS.find(f=>f.id===o.fId); r2.push([i+1,"",o.client,o.tel,f?f.nom:"",o.sacs,o.sacs*50,o.prix,o.sacs*o.prix,ST[o.status]?ST[o.status].label:"",o.note]); });
+  for(let i=cj.length;i<30;i++) r2.push([i+1]);
+  r2.push([],["RÉCAP"],["Total cmds",cj.length],["Total sacs",cj.reduce((s,o)=>s+o.sacs,0)]);
+  const ws2 = X.utils.aoa_to_sheet(r2);
+  ws2["!cols"] = [{wch:4},{wch:8},{wch:22},{wch:14},{wch:26},{wch:7},{wch:10},{wch:14},{wch:16},{wch:14},{wch:20}];
+  X.utils.book_append_sheet(wb, ws2, "Journal Journalier");
+
+  const r3 = [[nom+" — Registre | "+d],[],["N°","Date","Client","Tél","Aliment","Sacs","Prix/sac","Total","Statut","Note"]];
+  orders.forEach(o => { const f=FMLS.find(f=>f.id===o.fId); r3.push([o.id,o.date,o.client,o.tel,f?f.e+" "+f.nom:o.fId,o.sacs,o.prix,o.sacs*o.prix,ST[o.status]?ST[o.status].label:"",o.note]); });
+  r3.push(["TOTAL","","","","",orders.reduce((s,o)=>s+o.sacs,0),"",orders.reduce((s,o)=>s+o.sacs*o.prix,0)]);
+  const ws3 = X.utils.aoa_to_sheet(r3);
+  ws3["!cols"] = [{wch:10},{wch:12},{wch:22},{wch:14},{wch:28},{wch:7},{wch:12},{wch:16},{wch:14},{wch:20}];
+  X.utils.book_append_sheet(wb, ws3, "Toutes commandes");
+
+  // Téléchargement compatible mobile
+  var wbout = X.write(wb, {bookType:"xlsx", type:"array"});
+  var blob = new Blob([wbout], {type:"application/octet-stream"});
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement("a");
+  a.href = url;
+  a.download = "AgriFeed_"+(nom||"Moulin").replace(/\s+/g,"_")+"_"+d.replace(/\//g,"-")+".xlsx";
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
+}
+
+// ─── LICENCE SYSTEM ───────────────────────────────────────────
+// Votre code super-admin secret (pour gérer les licences)
+var SUPER_ADMIN_CODE = "AGRIFEED-OWNER-2025";
+
+function LicenceGate(props) {
+  var onUnlock = props.onUnlock;
+  var gc = "#2d6e2d";
+  var [code, setCode] = useState(lsGet("lic_code",""));
+  var [err,  setErr]  = useState("");
+  var [loading, setLoading] = useState(false);
+
+  function verifier() {
+    if(!code.trim()){ setErr("Entrez votre code de licence"); return; }
+    // Code propriétaire — accès direct au super admin
+    if(code.trim().toUpperCase()===SUPER_ADMIN_CODE) {
+      lsSet("sa_tap",0);
+      // signal to parent to open super admin
+      onUnlock({moulin:"__SUPERADMIN__",status:"active",expiration:null});
+      return;
+    }
+    if(!db){ setErr("Pas de connexion internet. Réessayez dans quelques secondes."); return; }
+    setLoading(true); setErr("");
+    db.collection("licences").doc(code.trim().toUpperCase()).get().then(function(d){
+      setLoading(false);
+      if(!d.exists){ setErr("Code invalide. Contactez AgriFeed Pro au 01 53 25 56 54."); return; }
+      var lic = d.data();
+      if(lic.status==="bloquee"){ setErr("Licence suspendue. Contactez AgriFeed Pro."); return; }
+      var now = Date.now();
+      if(lic.expiration && lic.expiration < now){ setErr("Licence expirée. Renouvelez votre abonnement."); return; }
+      db.collection("licences").doc(code.trim().toUpperCase()).update({derniere_connexion:now, connexions:(lic.connexions||0)+1}).catch(function(){});
+      lsSet("lic_code", code.trim().toUpperCase());
+      lsSet("lic_data", lic);
+      onUnlock(lic);
+    }).catch(function(e){
+      setLoading(false);
+      setErr("Erreur de connexion. Vérifiez votre internet.");
+    });
+  }
+
+  return (
+    <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#0d2b0d,#1a4a1a,#0d2b0d)",display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div style={{background:"#fff",borderRadius:28,padding:32,maxWidth:360,width:"100%",boxShadow:"0 20px 60px rgba(0,0,0,0.4)"}}>
+        <div style={{textAlign:"center",marginBottom:24}}>
+          <div style={{fontSize:52,marginBottom:10}}>🌾</div>
+          <h2 style={{fontSize:20,color:"#1a2e1a",fontWeight:800,marginBottom:4}}>AgriFeed Pro</h2>
+          <p style={{fontSize:12,color:"#9ca3af"}}>Entrez votre code de licence pour accéder à l'application</p>
+        </div>
+        <div style={{marginBottom:12}}>
+          <label style={{display:"block",fontSize:11,color:"#6b7280",fontWeight:700,textTransform:"uppercase",letterSpacing:0.5,marginBottom:6}}>Code de licence</label>
+          <input style={{width:"100%",border:"2px solid "+(err?"#ef4444":"#e2e8e2"),borderRadius:12,padding:"12px 14px",fontSize:15,outline:"none",boxSizing:"border-box",fontFamily:"monospace",letterSpacing:1,textTransform:"uppercase"}}
+            placeholder="EX: MOULIN-2025-ABIDJAN"
+            value={code}
+            onChange={function(e){setCode(e.target.value.toUpperCase());setErr("");}}
+            onKeyDown={function(e){if(e.key==="Enter")verifier();}}/>
+          {err && <div style={{color:"#ef4444",fontSize:12,marginTop:6,fontWeight:600}}>⚠️ {err}</div>}
+        </div>
+        <button onClick={verifier} disabled={loading} style={{width:"100%",background:loading?"#9ca3af":"linear-gradient(135deg,#0d2b0d,#2d6e2d)",color:"#fff",border:"none",borderRadius:12,padding:"13px",fontWeight:700,fontSize:14,cursor:loading?"not-allowed":"pointer",boxShadow:"0 4px 14px rgba(45,110,45,0.4)",marginBottom:16}}>
+          {loading?"⏳ Vérification...":"🔓 Accéder à l'application"}
+        </button>
+        <div style={{textAlign:"center",background:"#f0faf0",borderRadius:12,padding:"12px 16px"}}>
+          <div style={{fontSize:11,color:"#6b7280",marginBottom:4}}>Pas encore de licence ?</div>
+          <div style={{fontWeight:700,color:"#2d6e2d",fontSize:14}}>📞 01 53 25 56 54</div>
+          <div style={{fontSize:11,color:"#9ca3af",marginTop:3}}>💚 Moov Money · 🌊 Wave</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── SUPER ADMIN (panneau propriétaire AgriFeed Pro) ──────────
+function SuperAdmin(props) {
+  var onExit = props.onExit;
+  var [licences, setLicences] = useState([]);
+  var [form, setForm] = useState({code:"",moulin:"",pays:"",tel:"",mois:1});
+  var [msg, setMsg] = useState("");
+  var [loading, setLoading] = useState(false);
+
+  function genCode() {
+    var chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    var r = ""; for(var i=0;i<8;i++) r+=chars[Math.floor(Math.random()*chars.length)];
+    setForm(function(p){return Object.assign({},p,{code:"AF-"+r});});
+  }
+
+  function charger() {
+    if(!db) return;
+    db.collection("licences").get().then(function(snap){
+      var docs = [];
+      snap.forEach(function(d){ docs.push(Object.assign({id:d.id},d.data())); });
+      docs.sort(function(a,b){return (b.created||0)-(a.created||0);});
+      setLicences(docs);
+    });
+  }
+
+  useState(function(){ setTimeout(charger,500); return undefined; });
+
+  function creer() {
+    if(!form.code||!form.moulin){ setMsg("⚠️ Code et nom du moulin requis"); return; }
+    setLoading(true);
+    var exp = Date.now() + form.mois*30*24*60*60*1000;
+    var lic = {code:form.code,moulin:form.moulin,pays:form.pays||"Côte d'Ivoire",tel:form.tel,status:"active",expiration:exp,created:Date.now(),connexions:0,derniere_connexion:null};
+    db.collection("licences").doc(form.code).set(lic).then(function(){
+      setMsg("✅ Licence créée ! Code : "+form.code);
+      setForm({code:"",moulin:"",pays:"",tel:"",mois:1});
+      setLoading(false);
+      charger();
+    }).catch(function(e){ setMsg("❌ Erreur: "+e.message); setLoading(false); });
+  }
+
+  function bloquer(id, actuel) {
+    var nv = actuel==="active"?"bloquee":"active";
+    db.collection("licences").doc(id).update({status:nv}).then(charger);
+  }
+
+  var card = {background:"#fff",borderRadius:20,padding:20,boxShadow:"0 4px 16px rgba(0,0,0,0.08)",marginBottom:14};
+  var inp  = {width:"100%",border:"2px solid #e2e8e2",borderRadius:10,padding:"9px 12px",fontSize:13,outline:"none",boxSizing:"border-box"};
+
+  return (
+    <div style={{minHeight:"100vh",background:"#0f172a",color:"#fff",padding:"0 0 40px"}}>
+      <div style={{background:"linear-gradient(135deg,#1e1b4b,#312e81)",padding:"20px 20px 24px"}}>
+        <button onClick={onExit} style={{background:"rgba(255,255,255,0.15)",color:"#fff",border:"none",borderRadius:10,padding:"6px 14px",cursor:"pointer",fontSize:12,marginBottom:14}}>← Quitter</button>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <div style={{fontSize:36}}>👑</div>
+          <div>
+            <div style={{fontSize:11,color:"#a5b4fc",letterSpacing:2,textTransform:"uppercase"}}>Propriétaire</div>
+            <div style={{fontSize:20,fontWeight:800}}>AgriFeed Pro</div>
+            <div style={{fontSize:12,color:"#818cf8"}}>Gestion des licences</div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{maxWidth:700,margin:"0 auto",padding:"20px 16px"}}>
+
+        {/* Stats */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:20}}>
+          {[
+            {l:"Total",v:licences.length,c:"#818cf8",i:"📋"},
+            {l:"Actives",v:licences.filter(function(l){return l.status==="active";}).length,c:"#34d399",i:"✅"},
+            {l:"Bloquées",v:licences.filter(function(l){return l.status==="bloquee";}).length,c:"#f87171",i:"🚫"},
+          ].map(function(s){
+            return (
+              <div key={s.l} style={{background:"rgba(255,255,255,0.07)",borderRadius:16,padding:"14px 12px",textAlign:"center",border:"1px solid rgba(255,255,255,0.1)"}}>
+                <div style={{fontSize:20}}>{s.i}</div>
+                <div style={{fontSize:24,fontWeight:800,color:s.c}}>{s.v}</div>
+                <div style={{fontSize:11,color:"#94a3b8"}}>{s.l}</div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Créer une licence */}
+        <div style={Object.assign({},card,{background:"rgba(255,255,255,0.06)",border:"1px solid rgba(165,180,252,0.3)"})}>
+          <h3 style={{marginBottom:14,color:"#e2e8f0",fontSize:15}}>➕ Créer une nouvelle licence</h3>
+          <div style={{display:"grid",gridTemplateColumns:"1fr auto",gap:8,marginBottom:10}}>
+            <input style={Object.assign({},inp,{background:"rgba(255,255,255,0.08)",color:"#fff",borderColor:"rgba(255,255,255,0.2)",fontFamily:"monospace",letterSpacing:1,fontSize:14})} placeholder="Code licence" value={form.code} onChange={function(e){setForm(function(p){return Object.assign({},p,{code:e.target.value.toUpperCase()});});}}/>
+            <button onClick={genCode} style={{background:"#4f46e5",color:"#fff",border:"none",borderRadius:10,padding:"9px 14px",cursor:"pointer",fontSize:12,fontWeight:700,whiteSpace:"nowrap"}}>🎲 Générer</button>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+            <input style={Object.assign({},inp,{background:"rgba(255,255,255,0.08)",color:"#fff",borderColor:"rgba(255,255,255,0.2)"})} placeholder="Nom du moulin *" value={form.moulin} onChange={function(e){setForm(function(p){return Object.assign({},p,{moulin:e.target.value});});}}/>
+            <input style={Object.assign({},inp,{background:"rgba(255,255,255,0.08)",color:"#fff",borderColor:"rgba(255,255,255,0.2)"})} placeholder="Pays" value={form.pays} onChange={function(e){setForm(function(p){return Object.assign({},p,{pays:e.target.value}); });}}/>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
+            <input style={Object.assign({},inp,{background:"rgba(255,255,255,0.08)",color:"#fff",borderColor:"rgba(255,255,255,0.2)"})} placeholder="Téléphone client" value={form.tel} onChange={function(e){setForm(function(p){return Object.assign({},p,{tel:e.target.value});});}}/>
+            <select style={Object.assign({},inp,{background:"#1e293b",color:"#fff",borderColor:"rgba(255,255,255,0.2)"})} value={form.mois} onChange={function(e){setForm(function(p){return Object.assign({},p,{mois:parseInt(e.target.value)});}); }}>
+              <option value={1}>1 mois — 15 000 FCFA</option>
+              <option value={3}>3 mois — 40 000 FCFA</option>
+              <option value={6}>6 mois — 75 000 FCFA</option>
+              <option value={12}>12 mois — 120 000 FCFA</option>
+            </select>
+          </div>
+          <button onClick={creer} disabled={loading} style={{width:"100%",background:loading?"#374151":"linear-gradient(135deg,#4f46e5,#7c3aed)",color:"#fff",border:"none",borderRadius:12,padding:"12px",fontWeight:700,fontSize:14,cursor:loading?"not-allowed":"pointer"}}>
+            {loading?"⏳ Création...":"✅ Créer la licence"}
+          </button>
+          {msg && <div style={{marginTop:10,background:"rgba(255,255,255,0.1)",borderRadius:10,padding:"10px 14px",fontSize:13,color:"#a5b4fc",fontWeight:600}}>{msg}</div>}
+        </div>
+
+        {/* Liste des licences */}
+        <h3 style={{marginBottom:12,color:"#e2e8f0",fontSize:15}}>📋 Toutes les licences ({licences.length})</h3>
+        <button onClick={charger} style={{background:"rgba(255,255,255,0.1)",color:"#fff",border:"none",borderRadius:10,padding:"7px 16px",cursor:"pointer",fontSize:12,marginBottom:14}}>🔄 Actualiser</button>
+        {licences.length===0 && <div style={{textAlign:"center",color:"#64748b",padding:30}}>Aucune licence créée</div>}
+        {licences.map(function(lic){
+          var exp = lic.expiration ? new Date(lic.expiration).toLocaleDateString("fr-FR") : "—";
+          var expOk = !lic.expiration || lic.expiration > Date.now();
+          var actif = lic.status==="active" && expOk;
+          return (
+            <div key={lic.id} style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,"+(actif?"0.15":"0.05")+")",borderRadius:16,padding:"14px 16px",marginBottom:10,borderLeft:"4px solid "+(actif?"#34d399":lic.status==="bloquee"?"#f87171":"#f59e0b")}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10,flexWrap:"wrap"}}>
+                <div style={{flex:1}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,flexWrap:"wrap"}}>
+                    <span style={{fontFamily:"monospace",fontWeight:800,fontSize:14,color:"#e2e8f0",letterSpacing:1}}>{lic.id}</span>
+                    <span style={{background:actif?"rgba(52,211,153,0.2)":lic.status==="bloquee"?"rgba(248,113,113,0.2)":"rgba(245,158,11,0.2)",color:actif?"#34d399":lic.status==="bloquee"?"#f87171":"#fbbf24",padding:"2px 10px",borderRadius:20,fontSize:10,fontWeight:700}}>
+                      {actif?"✅ ACTIVE":lic.status==="bloquee"?"🚫 BLOQUÉE":"⚠️ EXPIRÉE"}
+                    </span>
+                  </div>
+                  <div style={{fontSize:13,color:"#cbd5e1",fontWeight:600}}>{lic.moulin}</div>
+                  <div style={{fontSize:11,color:"#64748b",marginTop:2}}>
+                    {lic.pays&&lic.pays+" · "}{lic.tel&&"📞 "+lic.tel+" · "}Expire: {exp} · {lic.connexions||0} connexion{(lic.connexions||0)>1?"s":""}
+                  </div>
+                  {lic.derniere_connexion && <div style={{fontSize:10,color:"#475569",marginTop:2}}>Dernière connexion: {new Date(lic.derniere_connexion).toLocaleDateString("fr-FR")}</div>}
+                </div>
+                <button onClick={function(){bloquer(lic.id,lic.status);}} style={{background:lic.status==="active"?"rgba(248,113,113,0.2)":"rgba(52,211,153,0.2)",color:lic.status==="active"?"#f87171":"#34d399",border:"1px solid "+(lic.status==="active"?"#f87171":"#34d399"),borderRadius:10,padding:"6px 12px",cursor:"pointer",fontSize:11,fontWeight:700,flexShrink:0}}>
+                  {lic.status==="active"?"🚫 Bloquer":"✅ Activer"}
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+
+// ─── COMPOSANT INVENTAIRE ──────────────────────────────────────
+function InventaireTab(props) {
+  var mats = props.mats || [];
+  var achats = props.achats || [];
+  var setAchats = props.setAchats;
+  var orders = props.orders || [];
+  var customFmls = props.customFmls || {};
+  var gc = props.gc || "#2d6e2d";
+  var card = props.card || {};
+  var fmt = props.fmt || function(v){ return v+" F"; };
+
+  var [selMat,  setSelMat]  = React.useState(mats[0]?mats[0].id:"");
+  var [qteAch,  setQteAch]  = React.useState("");
+  var [dateAch, setDateAch] = React.useState(new Date().toISOString().slice(0,10));
+  var [msg,     setMsg]     = React.useState("");
+
+  // Calculer consommation par ingrédient depuis les commandes livrées
+  function calcConso() {
+    var conso = {};
+    orders.forEach(function(o) {
+      if(o.status !== "livre") return;
+      var fml = FMLS.find(function(f){ return f.id===o.fId; });
+      if(!fml) return;
+      var compo = (customFmls[o.fId]&&customFmls[o.fId].compo) ? customFmls[o.fId].compo : fml.compo;
+      var nbSacs = Number(o.qte) || 1;
+      Object.keys(compo).forEach(function(ing){
+        conso[ing] = (conso[ing]||0) + compo[ing]*nbSacs;
+      });
+    });
+    return conso;
+  }
+
+  // Calculer total acheté par ingrédient
+  function calcAchats() {
+    var totaux = {};
+    achats.forEach(function(a){
+      totaux[a.matId] = (totaux[a.matId]||0) + Number(a.qte);
+    });
+    return totaux;
+  }
+
+  var conso   = calcConso();
+  var totAch  = calcAchats();
+
+  function ajouterAchat() {
+    if(!selMat || !qteAch || Number(qteAch)<=0){ setMsg("⚠️ Remplissez tous les champs"); return; }
+    var newAchat = {id: Date.now()+"", matId:selMat, qte:Number(qteAch), date:dateAch};
+    var updated = [newAchat].concat(achats);
+    setAchats(updated);
+    fbSave("config","achats",{list:updated});
+    setQteAch("");
+    setMsg("✅ Achat enregistré !");
+    setTimeout(function(){ setMsg(""); }, 2000);
+  }
+
+  function supprimerAchat(id) {
+    var updated = achats.filter(function(a){ return a.id!==id; });
+    setAchats(updated);
+    fbSave("config","achats",{list:updated});
+  }
+
+  var inp = {width:"100%",border:"2px solid #e2e8e2",borderRadius:10,padding:"9px 12px",fontSize:14,outline:"none",boxSizing:"border-box"};
+
+  return (
+    <div style={{display:"grid",gap:16}}>
+
+      {/* Ajouter un achat */}
+      <div style={Object.assign({},card,{background:"#f0faf0"})}>
+        <h3 style={{color:"#1a2e1a",marginBottom:14,fontSize:15}}>➕ Enregistrer un achat</h3>
+        <div style={{display:"grid",gap:8}}>
+          <div>
+            <label style={{fontSize:11,fontWeight:700,color:"#6b7280",display:"block",marginBottom:4}}>INGRÉDIENT</label>
+            <select style={inp} value={selMat} onChange={function(e){setSelMat(e.target.value);}}>
+              {mats.map(function(m){ return <option key={m.id} value={m.id}>{m.nom}</option>; })}
+            </select>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+            <div>
+              <label style={{fontSize:11,fontWeight:700,color:"#6b7280",display:"block",marginBottom:4}}>QUANTITÉ (kg/pce)</label>
+              <input type="number" min="0" step="0.5" style={inp} placeholder="ex: 500" value={qteAch}
+                onChange={function(e){setQteAch(e.target.value);}}/>
+            </div>
+            <div>
+              <label style={{fontSize:11,fontWeight:700,color:"#6b7280",display:"block",marginBottom:4}}>DATE</label>
+              <input type="date" style={inp} value={dateAch}
+                onChange={function(e){setDateAch(e.target.value);}}/>
+            </div>
+          </div>
+          <button onClick={ajouterAchat}
+            style={{background:"linear-gradient(135deg,#0d2b0d,"+gc+")",color:"#fff",border:"none",
+              borderRadius:10,padding:"11px",fontWeight:700,fontSize:13,cursor:"pointer"}}>
+            💾 Enregistrer l'achat
+          </button>
+          {msg && <div style={{background:msg.includes("✅")?"#f0faf0":"#FEF2F2",borderRadius:8,padding:"8px 12px",fontSize:13,
+            color:msg.includes("✅")?"#059669":"#EF4444",fontWeight:600}}>{msg}</div>}
+        </div>
+      </div>
+
+      {/* Stock actuel */}
+      <div style={card}>
+        <h3 style={{color:"#1a2e1a",marginBottom:4,fontSize:15}}>📊 Stock en temps réel</h3>
+        <p style={{fontSize:11,color:"#6b7280",marginBottom:14}}>Basé sur vos achats moins les commandes livrées</p>
+        <div style={{display:"grid",gap:8}}>
+          {mats.map(function(m){
+            var ach  = totAch[m.id]  || 0;
+            var cons = conso[m.id]   || 0;
+            var rest = ach - cons;
+            var pct  = ach>0 ? Math.min(100,Math.round(rest/ach*100)) : 0;
+            var color = rest<=0?"#EF4444":pct<25?"#F59E0B":pct<50?"#EAB308":"#22c55e";
+            if(ach===0 && cons===0) return null;
+            return (
+              <div key={m.id} style={{background:rest<=0?"#FEF2F2":"#f8fdf8",borderRadius:12,padding:"12px 14px",border:"1px solid "+(rest<=0?"#fecaca":"#c6e6c6")}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                  <span style={{fontWeight:700,fontSize:13,color:"#1a2e1a"}}>{m.nom}</span>
+                  <span style={{fontWeight:800,fontSize:15,color:color}}>{rest<=0?"⚠️ ":"✅ "}{rest.toFixed(1)} {m.u}</span>
+                </div>
+                <div style={{background:"#e5e7eb",borderRadius:999,height:6,overflow:"hidden"}}>
+                  <div style={{width:pct+"%",background:color,height:"100%",borderRadius:999,transition:"width 0.3s"}}/>
+                </div>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:"#9ca3af",marginTop:4}}>
+                  <span>Acheté: {ach.toFixed(1)} {m.u}</span>
+                  <span>Consommé: {cons.toFixed(1)} {m.u}</span>
+                </div>
+              </div>
+            );
+          })}
+          {Object.keys(totAch).length===0 && (
+            <div style={{textAlign:"center",color:"#9ca3af",padding:20,fontSize:13}}>
+              Aucun achat enregistré — ajoutez vos achats ci-dessus 👆
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Historique des achats */}
+      {achats.length>0 && (
+        <div style={card}>
+          <h3 style={{color:"#1a2e1a",marginBottom:14,fontSize:15}}>📋 Historique des achats</h3>
+          <div style={{display:"grid",gap:6}}>
+            {achats.slice(0,20).map(function(a){
+              var mat = mats.find(function(m){ return m.id===a.matId; });
+              return (
+                <div key={a.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+                  background:"#f8fdf8",borderRadius:10,padding:"10px 14px",border:"1px solid #e5e7eb"}}>
+                  <div>
+                    <span style={{fontWeight:700,fontSize:13,color:"#1a2e1a"}}>{mat?mat.nom:a.matId}</span>
+                    <span style={{fontSize:11,color:"#6b7280",marginLeft:8}}>{a.date}</span>
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <span style={{fontWeight:700,color:gc}}>{a.qte} {mat?mat.u:"kg"}</span>
+                    <button onClick={function(){supprimerAchat(a.id);}}
+                      style={{background:"#FEE2E2",color:"#EF4444",border:"none",borderRadius:8,
+                        padding:"4px 8px",cursor:"pointer",fontSize:12,fontWeight:700}}>✕</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── COMPOSANT CHANGEMENT PIN ─────────────────────────────────
+function PinChanger(props) {
+  var employeePin = props.employeePin;
+  var setEmployeePin = props.setEmployeePin;
+  var gc = props.gc || "#2d6e2d";
+  var [oldPin,  setOldPin]  = useState("");
+  var [newPin,  setNewPin]  = useState("");
+  var [newPin2, setNewPin2] = useState("");
+  var [msg,     setMsg]     = useState("");
+  var [ok,      setOk]      = useState(false);
+
+  function sauvegarder() {
+    if(!oldPin || !newPin || !newPin2){ setMsg("⚠️ Remplissez tous les champs"); setOk(false); return; }
+    if(oldPin !== employeePin){ setMsg("⚠️ Ancien code incorrect"); setOk(false); return; }
+    if(newPin.length < 4){ setMsg("⚠️ Le nouveau code doit avoir au moins 4 chiffres"); setOk(false); return; }
+    if(newPin !== newPin2){ setMsg("⚠️ Les deux nouveaux codes ne correspondent pas"); setOk(false); return; }
+    setEmployeePin(newPin);
+    lsSet("employeePin", newPin);
+    fbSave("config","employeePin",{pin:newPin});
+    setMsg("✅ Code changé avec succès !");
+    setOk(true);
+    setOldPin(""); setNewPin(""); setNewPin2("");
+    setTimeout(function(){ setMsg(""); }, 3000);
+  }
+
+  var inp2 = {width:"100%",border:"2px solid #e2e8e2",borderRadius:10,padding:"10px 12px",fontSize:18,letterSpacing:6,textAlign:"center",outline:"none",boxSizing:"border-box"};
+
+  return (
+    <div style={{display:"grid",gap:8}}>
+      <div>
+        <label style={{display:"block",fontSize:11,color:"#6b7280",fontWeight:700,marginBottom:4}}>ANCIEN CODE</label>
+        <input type="password" maxLength={8} style={inp2} placeholder="••••" value={oldPin} onChange={function(e){setOldPin(e.target.value);setMsg("");}}/>
+      </div>
+      <div>
+        <label style={{display:"block",fontSize:11,color:"#6b7280",fontWeight:700,marginBottom:4}}>NOUVEAU CODE</label>
+        <input type="password" maxLength={8} style={inp2} placeholder="••••" value={newPin} onChange={function(e){setNewPin(e.target.value);setMsg("");}}/>
+      </div>
+      <div>
+        <label style={{display:"block",fontSize:11,color:"#6b7280",fontWeight:700,marginBottom:4}}>CONFIRMER NOUVEAU CODE</label>
+        <input type="password" maxLength={8} style={inp2} placeholder="••••" value={newPin2} onChange={function(e){setNewPin2(e.target.value);setMsg("");}}/>
+      </div>
+      <button onClick={sauvegarder} style={{background:"linear-gradient(135deg,#0d2b0d,"+gc+")",color:"#fff",border:"none",borderRadius:10,padding:"11px",fontWeight:700,fontSize:13,cursor:"pointer",marginTop:4}}>
+        💾 Enregistrer le nouveau code
+      </button>
+      {msg && <div style={{background:ok?"#f0faf0":"#FEF2F2",borderRadius:8,padding:"8px 12px",fontSize:13,color:ok?"#059669":"#EF4444",fontWeight:600}}>{msg}</div>}
+      <div style={{fontSize:11,color:"#9ca3af",textAlign:"center"}}>Code actuel : {"•".repeat(employeePin.length)} ({employeePin.length} caractères)</div>
+    </div>
+  );
+}
+
+// ─── HEADER (défini hors de App) ──────────────────────────────
+function AppHeader(props) {
+  var moulin = props.moulin;
+  var gc     = props.gc;
+  var back   = props.back;
+  var goHome = props.goHome;
+  return (
+    <header style={{background:"linear-gradient(135deg,#0d2b0d,"+gc+")",padding:"14px 22px",display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 3px 16px rgba(0,0,0,0.3)"}}>
+      <div style={{display:"flex",alignItems:"center",gap:12}}>
+        <span style={{fontSize:28}}>🌾</span>
+        <div>
+          <div style={{color:"#86efac",fontSize:9,letterSpacing:3,textTransform:"uppercase"}}>Moulin</div>
+          <div style={{color:"#fff",fontSize:18,fontWeight:700}}>{moulin.nom}</div>
+          {moulin.tel && <div style={{color:"#d1fae5",fontSize:11}}>📞 {moulin.tel}{moulin.ville?" · 📍 "+moulin.ville:""}</div>}
+        </div>
+      </div>
+      {back && <button onClick={goHome} style={{background:"rgba(255,255,255,0.2)",color:"#fff",border:"none",borderRadius:20,padding:"8px 18px",cursor:"pointer",fontWeight:700,fontSize:13}}>← Accueil</button>}
+    </header>
+  );
+}
+
+// ─── PAGE WRAPPER (défini hors de App) ────────────────────────
+function PageWrap(props) {
+  return (
+    <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",background:"#f0f4f0"}}>
+      <AppHeader moulin={props.moulin} gc={props.gc} back={props.back} goHome={props.goHome}/>
+      <div style={{maxWidth:props.wide?1240:900,margin:"0 auto",padding:props.wide?"30px 28px":"24px 16px",flex:1,width:"100%"}}>
+        {props.children}
+      </div>
+    </div>
+  );
+}
+
+// ─── APP ──────────────────────────────────────────────────────
+function App() {
+  // ── Système de licence ──
+  var [licOk,      setLicOk]    = useState(function(){ 
+    var saved = lsGet("lic_data",null);
+    var code  = lsGet("lic_code","");
+    if(!saved || !code) return false;
+    if(saved.status==="bloquee") return false;
+    if(saved.expiration && saved.expiration < Date.now()) return false;
+    return true;
+  });
+  var [superAdmin, setSuperAdmin] = useState(false);
+  var [saCode,     setSaCode]   = useState("");
+
+  const [moulin,   setMoulin]   = useState(function(){ return lsGet("moulin",{nom:"Mon Moulin",tel:"",ville:"",couleur:"#2d6e2d"}); });
+  const [mats,     setMats]     = useState(function(){ return lsGet("mats",initMats); });
+  const [orders,   setOrders]   = useState(function(){ return lsGet("orders",[
+    {id:"CMD-001",client:"Konan Yao",    tel:"07 12 34 56",fId:"chair_dem",sacs:20,prix:8500,date:today(),status:"en_attente",    note:""},
+    {id:"CMD-002",client:"Adjoua Bamba",tel:"05 98 76 54",fId:"pondeuse",  sacs:50,prix:9200,date:today(),status:"en_production",note:"Livraison à domicile"},
+  ]); });
+  const [fClients,  setFClients]  = useState(function(){ return lsGet("fClients",[]); });
+  const [prixVente,  setPrixVente]  = useState(function(){ return lsGet("prixVente",{}); });
+  const [employeePin, setEmployeePin] = useState(function(){ return lsGet("employeePin","1234"); });
+  const [mainOeuvre,  setMainOeuvre]  = useState(function(){ return lsGet("mainOeuvre", 500); });
+  const [achats,      setAchats]      = useState(function(){ return lsGet("achats", []); });
+  const [customFmls, setCustomFmls] = useState(function(){ return lsGet("customFmls",{}); });
+  const [prixIngs,  setPrixIngs]  = useState(function(){ return lsGet("prixIngs",{}); });
+  const [editIngP,  setEditIngP]  = useState({});
+  const [fbOk,      setFbOk]      = useState(false);
+  const [view,     setView]     = useState("accueil");
+  const [adminOk,  setAdminOk]  = useState(false);
+  const [aCode,    setACode]    = useState("");
+  const [aErr,     setAErr]     = useState(false);
+  const [tab,      setTab]      = useState("commandes");
+  const [editP,    setEditP]    = useState({});
+  const [step,     setStep]     = useState(1);
+  const [cForm,    setCForm]    = useState({client:"",tel:"",fId:"",sacs:10,note:""});
+  const [cOk,      setCOk]      = useState(null);
+  const [fForm,    setFForm]    = useState({client:"",tel:"",animal:"",desc:"",fichier:"",ings:[emptyIng()]});
+  const [fOk,      setFOk]      = useState(false);
+  const [cfg,      setCfg]      = useState(function(){ return lsGet("moulin",{nom:"Mon Moulin",tel:"",ville:"",couleur:"#2d6e2d"}); });
+  const [cfgOk,    setCfgOk]    = useState(false);
+  const [xlMsg,    setXlMsg]    = useState("");
+  const [qrCop,    setQrCop]    = useState(false);
+
+  // ── Backup local ──
+  useEffect(function(){ lsSet("moulin",    moulin);    }, [moulin]);
+  useEffect(function(){ lsSet("mats",      mats);      }, [mats]);
+  useEffect(function(){ lsSet("prixVente",  prixVente);  }, [prixVente]);
+  useEffect(function(){ lsSet("customFmls",   customFmls);  }, [customFmls]);
+  useEffect(function(){ lsSet("employeePin", employeePin); }, [employeePin]);
+  useEffect(function(){ lsSet("mainOeuvre",  mainOeuvre);  }, [mainOeuvre]);
+  useEffect(function(){ lsSet("achats",      achats);      }, [achats]);
+  useEffect(function(){ lsSet("prixIngs",  prixIngs);  }, [prixIngs]);
+
+  // ── Firebase temps réel ──
+  useEffect(function() {
+    var u1 = null, u2 = null;
+    var connected = false;
+
+    function connectFirebase() {
+      if(connected || !db) return;
+      connected = true;
+      setFbOk(true);
+
+      u1 = db.collection("orders").onSnapshot(function(snap) {
+        var docs = [];
+        snap.forEach(function(d){ docs.push(Object.assign({},d.data(),{id:d.id})); });
+        docs.sort(function(a,b){ return (b.createdAt||0)-(a.createdAt||0); });
+        if(docs.length>0){ setOrders(docs); lsSet("orders",docs); }
+      }, function(err){ console.warn("orders:",err); });
+
+      u2 = db.collection("fClients").onSnapshot(function(snap) {
+        var docs = [];
+        snap.forEach(function(d){ docs.push(Object.assign({},d.data(),{id:d.id})); });
+        docs.sort(function(a,b){ return (b.createdAt||0)-(a.createdAt||0); });
+        setFClients(docs); lsSet("fClients",docs);
+      }, function(err){ console.warn("fClients:",err); });
+
+      db.collection("config").doc("moulin").get().then(function(d){
+        if(d.exists){ var v=d.data(); setMoulin(v); setCfg(v); lsSet("moulin",v); }
+      }).catch(function(){});
+      db.collection("config").doc("mats").get().then(function(d){
+        if(d.exists){ var v=d.data().list; if(v&&v.length){ setMats(v); lsSet("mats",v); } }
+      }).catch(function(){});
+      db.collection("config").doc("prixVente").get().then(function(d){
+        if(d.exists){ var v=d.data(); setPrixVente(v); lsSet("prixVente",v); }
+      }).catch(function(){});
+      db.collection("config").doc("prixIngs").get().then(function(d){
+        if(d.exists){ var v=d.data(); setPrixIngs(v); lsSet("prixIngs",v); }
+      }).catch(function(){});
+    }
+
+    // Essayer immédiatement puis toutes les 500ms jusqu'à connexion
+    connectFirebase();
+    var timer = setInterval(function(){
+      if(connected){ clearInterval(timer); return; }
+      connectFirebase();
+    }, 500);
+    setTimeout(function(){ clearInterval(timer); }, 10000);
+
+    return function(){
+      clearInterval(timer);
+      if(u1) u1();
+      if(u2) u2();
+    };
+  }, []);
+
+  const gc     = moulin.couleur || "#2d6e2d";
+  const goHome = function() { setView("accueil"); setStep(1); setCOk(null); setFOk(false); };
+  const selF   = FMLS.find(function(f){ return f.id===cForm.fId; });
+  const pSac   = selF ? (prixVente[selF.id] || calcP(selF,mats,customFmls)) : 0;
+  const nbFC   = fClients.filter(function(f){ return f.status==="en_attente"; }).length;
+
+  // Styles de base réutilisables
+  const card = {background:"#fff",borderRadius:22,padding:26,boxShadow:"0 4px 20px rgba(45,110,45,0.13)",marginBottom:16};
+  const inp  = {width:"100%",border:"2px solid #e2e8e2",borderRadius:10,padding:"10px 13px",fontSize:14,outline:"none",boxSizing:"border-box"};
+  const lbl  = {display:"block",fontSize:11,color:"#6b7280",fontWeight:700,letterSpacing:0.5,textTransform:"uppercase",marginBottom:5};
+
+  function mkBtn(c) {
+    var col = c || gc;
+    return {background:col,color:"#fff",border:"none",borderRadius:10,padding:"12px 22px",cursor:"pointer",fontWeight:700,fontSize:14,boxShadow:"0 4px 10px "+col+"44"};
+  }
+  function mkBtnO(c) {
+    var col = c || gc;
+    return {background:"#fff",color:col,border:"2px solid "+col,borderRadius:10,padding:"10px 18px",cursor:"pointer",fontWeight:700,fontSize:13};
+  }
+
+  // Helpers formule
+  function updIng(i, field, val) {
+    var a = fForm.ings.slice();
+    a[i] = Object.assign({}, a[i]);
+    a[i][field] = val;
+    setFForm(Object.assign({}, fForm, {ings:a}));
+  }
+  function addIng()  { setFForm(Object.assign({}, fForm, {ings:fForm.ings.concat([emptyIng()])})); }
+  function delIng(i) { setFForm(Object.assign({}, fForm, {ings:fForm.ings.filter(function(_,j){ return j!==i; })})); }
+
+  function submitOrder() {
+    var pv = selF ? (prixVente[selF.id] || Math.round(calcP(selF,mats,customFmls))) : Math.round(pSac);
+    var oId = "CMD-"+Date.now();
+    var o = {id:oId,client:cForm.client,tel:cForm.tel,fId:cForm.fId,sacs:cForm.sacs,prix:pv,date:today(),status:"en_attente",note:cForm.note,createdAt:Date.now()};
+    fbSave("orders", oId, o);
+    setOrders(function(p){ return [o].concat(p); });
+    setCOk(o);
+    setCForm({client:"",tel:"",fId:"",sacs:10,note:""}); setStep(1);
+  }
+
+  function submitFC() {
+    var ingsValid = fForm.ings.filter(function(x){ return x.nom&&x.qte; });
+    var total     = calcDevis(ingsValid);
+    var fcId = "FC-"+Date.now();
+    var nf = {id:fcId,client:fForm.client,tel:fForm.tel,animal:fForm.animal,desc:fForm.desc,ings:ingsValid,total:total,fichier:fForm.fichier,date:today(),status:"en_attente",notif:"",createdAt:Date.now()};
+    fbSave("fClients", fcId, nf);
+    setFClients(function(p){ return [nf].concat(p); });
+    setFOk(true);
+    setFForm({client:"",tel:"",animal:"",desc:"",fichier:"",ings:[emptyIng()]});
+  }
+
+  function saveP(id) {
+    var v = parseFloat(editP[id]);
+    if(!isNaN(v) && v>0) {
+      var nm = mats.map(function(m){ return m.id===id ? Object.assign({},m,{p:v}) : m; });
+      setMats(nm);
+      fbSave("config","mats",{list:nm});
+    }
+    setEditP(function(p){ var n=Object.assign({},p); delete n[id]; return n; });
+  }
+
+  function advanceFC(id, from) {
+    var next = from==="en_attente" ? "en_cours" : "termine";
+    var notifMsg = from==="en_cours" ? "Bonjour, votre commande de formule personnalisée est prête. Contactez-nous pour la récupérer. Merci !" : "";
+    var upd = {status:next};
+    if(notifMsg) upd.notif = notifMsg;
+    fbUpdate("fClients", id, upd);
+    setFClients(function(p){ return p.map(function(f){ return f.id===id ? Object.assign({},f,{status:next,notif:notifMsg||f.notif}) : f; }); });
+  }
+
+  var appUrl = window.location.href.split("?")[0];
+  var qrSrc  = "https://api.qrserver.com/v1/create-qr-code/?size=240x240&data="+encodeURIComponent(appUrl)+"&color=0d2b0d&bgcolor=FFFFFF&qzone=2";
+
+  function printQR() {
+    var w = window.open("","_blank","width=580,height=680");
+    if(!w) { alert("Autorisez les popups."); return; }
+    var html = '<!DOCTYPE html><html><head><meta charset="utf-8"/><title>QR</title>'
+      +'<style>*{margin:0;padding:0;box-sizing:border-box}@page{margin:8mm}body{font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh}'
+      +'.c{border:3px solid '+gc+';border-radius:20px;padding:28px 24px;text-align:center;max-width:300px;width:100%}'
+      +'.nm{color:'+gc+';font-size:19px;font-weight:700;margin:8px 0 3px}.sb{color:#777;font-size:12px;margin-bottom:16px}'
+      +'.fr{background:'+gc+';border-radius:12px;padding:12px;display:inline-block;margin-bottom:14px}'
+      +'.fr img{width:210px;height:210px;display:block}'
+      +'.bx{background:#f0faf0;border-radius:9px;padding:10px;font-size:12px;color:#374151;line-height:1.8;margin-bottom:12px}'
+      +'.bx b{color:'+gc+'}'
+      +'.st{text-align:left;font-size:11px;color:#6b7280;line-height:2.3}'
+      +'.ft{margin-top:12px;font-size:10px;color:#9ca3af;border-top:1px solid #eee;padding-top:10px}'
+      +'</style></head><body><div class="c">'
+      +'<div style="font-size:38px">🌾</div>'
+      +'<div class="nm">'+moulin.nom+'</div>'
+      +'<div class="sb">'+(moulin.ville?'📍 '+moulin.ville:'Fabrication d\'aliments pour animaux')+'</div>'
+      +'<div class="fr"><img src="'+qrSrc+'" alt="QR"/></div>'
+      +'<div class="bx"><b>Scannez pour commander !</b><br/>Ouvrez l\'appareil photo et pointez vers le code</div>'
+      +'<div class="st">📱 1. Ouvrez votre appareil photo<br/>🔍 2. Pointez vers le QR code<br/>🌐 3. Appuyez sur le lien<br/>📦 4. Commandez directement</div>'
+      +'<div class="ft">AgriFeed Pro · '+(moulin.ville||'Côte d\'Ivoire')+'</div>'
+      +'</div>'
+      +'<scr'+'ipt>window.onload=function(){setTimeout(function(){window.print();},900);}<\/scr'+'ipt>'
+      +'</body></html>';
+    w.document.write(html);
+    w.document.close();
+  }
+
+  // ══ SUPER ADMIN (propriétaire) ══
+  if(superAdmin) return <SuperAdmin onExit={function(){setSuperAdmin(false);setSaCode("");}}/>;
+
+  // ══ LICENCE GATE ══
+  if(!licOk) {
+    return (
+      <div>
+        <LicenceGate onUnlock={function(lic){
+          if(lic.moulin==="__SUPERADMIN__"){ setSuperAdmin(true); return; }
+          if(lic.moulin){ setMoulin(function(p){return Object.assign({},p,{nom:lic.moulin,ville:lic.pays||p.ville});}); }
+          setLicOk(true);
+        }}/>
+        {/* Code secret propriétaire — triple tap invisible */}
+        <div style={{position:"fixed",bottom:0,right:0,width:60,height:60,opacity:0,cursor:"pointer",zIndex:9999}}
+          onClick={function(){
+            var n = (parseInt(lsGet("sa_tap",0))||0)+1;
+            lsSet("sa_tap",n);
+            if(n>=3){
+              lsSet("sa_tap",0);
+              var c2 = prompt("Code propriétaire AgriFeed Pro :");
+              if(c2===SUPER_ADMIN_CODE){ setSuperAdmin(true); }
+            }
+            setTimeout(function(){lsSet("sa_tap",0);},2000);
+          }}
+        />
+      </div>
+    );
+  }
+
+  // ══ ACCUEIL ══
+  if(view==="accueil") {
+    return (
+      <PageWrap moulin={moulin} gc={gc} back={false} goHome={goHome}>
+        {moulin.nom==="Mon Moulin" && (
+          <div onClick={function(){setView("admin");}} style={{background:"#FEF3C7",border:"1px solid #F59E0B",borderRadius:12,padding:"10px 16px",marginBottom:18,cursor:"pointer",fontSize:13,color:"#92400E",textAlign:"center"}}>
+            ⚠️ Propriétaire — <strong>Configurez votre moulin</strong> dans l'Espace Employé →
+          </div>
+        )}
+        <div style={{textAlign:"center",marginBottom:28,paddingTop:12}}>
+          <div style={{fontSize:52,marginBottom:10}}>🌾</div>
+          <h1 style={{fontSize:24,color:"#1a2e1a",fontWeight:700,marginBottom:4}}>{moulin.nom}</h1>
+          {moulin.tel && <div style={{color:"#6b7280",fontSize:13,marginBottom:4}}>📞 {moulin.tel}{moulin.ville?" · 📍 "+moulin.ville:""}</div>}
+          <p style={{color:"#9ca3af",fontSize:13}}>Fabrication d'aliments pour animaux · Poulet · Pondeuse · Porc</p>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,maxWidth:480,margin:"0 auto 22px"}}>
+          <div onClick={function(){setView("commande");}} style={{background:gc,color:"#fff",borderRadius:18,padding:"32px 18px",cursor:"pointer",textAlign:"center",boxShadow:"0 6px 20px "+gc+"55"}}>
+            <div style={{fontSize:46,marginBottom:10}}>📦</div>
+            <div style={{fontWeight:700,fontSize:17,marginBottom:5}}>Commander</div>
+            <div style={{fontSize:12,opacity:0.85}}>Aliments standards · sacs 50 kg</div>
+          </div>
+          <div onClick={function(){setView("formule");}} style={{background:"#7C3AED",color:"#fff",borderRadius:18,padding:"32px 18px",cursor:"pointer",textAlign:"center",boxShadow:"0 6px 20px #7C3AED55"}}>
+            <div style={{fontSize:46,marginBottom:10}}>🔬</div>
+            <div style={{fontWeight:700,fontSize:17,marginBottom:5}}>Ma formule</div>
+            <div style={{fontSize:12,opacity:0.85}}>Envoyez votre propre recette</div>
+          </div>
+        </div>
+        <div style={{maxWidth:480,margin:"0 auto",display:"flex",flexDirection:"column",gap:10}}>
+          <div onClick={function(){setView("admin");}} style={{background:"#fff",borderRadius:24,padding:"18px 24px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 6px 22px rgba(45,110,45,0.15)",border:"2px solid rgba(45,110,45,0.12)"}}>
+            <div style={{display:"flex",alignItems:"center",gap:14}}>
+              <div style={{width:46,height:46,background:"linear-gradient(135deg,#0d2b0d,"+gc+")",borderRadius:14,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,boxShadow:"0 4px 12px rgba(45,110,45,0.3)"}}>⚙️</div>
+              <div>
+                <div style={{fontWeight:700,fontSize:15,color:"#1a2e1a"}}>Espace Employé</div>
+                <div style={{fontSize:12,color:"#9ca3af",marginTop:2}}>Commandes · Stock · Configuration</div>
+              </div>
+            </div>
+            <div style={{color:gc,fontSize:20,fontWeight:700}}>→</div>
+          </div>
+          <div onClick={function(){setView("presentation");}} style={{background:"linear-gradient(135deg,#1a1a2e,#16213e)",borderRadius:24,padding:"18px 24px",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 6px 22px rgba(0,0,0,0.25)"}}>
+            <div style={{display:"flex",alignItems:"center",gap:14}}>
+              <div style={{width:46,height:46,background:"linear-gradient(135deg,#f59e0b,#ef4444)",borderRadius:14,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,boxShadow:"0 4px 12px rgba(245,158,11,0.4)"}}>💼</div>
+              <div>
+                <div style={{fontWeight:700,fontSize:15,color:"#fff"}}>Présentation commerciale</div>
+                <div style={{fontSize:12,color:"#94a3b8",marginTop:2}}>À montrer aux autres moulins</div>
+              </div>
+            </div>
+            <div style={{color:"#f59e0b",fontSize:20,fontWeight:700}}>→</div>
+          </div>
+        </div>
+      </PageWrap>
+    );
+  }
+
+  // ══ PRÉSENTATION COMMERCIALE ══
+  if(view==="presentation") {
+    var tarifs = [
+      {nom:"Installation",prix:"75 000",desc:"Configuration complète pour votre moulin",icon:"🔧",c:"#F59E0B",once:true},
+      {nom:"Abonnement Mensuel",prix:"15 000",desc:"Mises à jour + support technique",icon:"📅",c:"#2563EB",once:false},
+      {nom:"Pack Annuel",prix:"120 000",desc:"Installation + 12 mois (économisez 60 000 FCFA)",icon:"🎯",c:"#059669",once:true},
+    ];
+    var feats = [
+      {i:"📦",t:"Commandes en ligne",d:"Vos clients commandent 24h/24 depuis leur téléphone"},
+      {i:"🔬",t:"Formules personnalisées",d:"Recevez et gérez les recettes sur mesure de vos clients"},
+      {i:"🔥",t:"Données en temps réel",d:"Toutes les commandes visibles instantanément sur tous les appareils"},
+      {i:"💰",t:"Prix dynamiques",d:"Modifiez vos prix à tout moment, mise à jour immédiate"},
+      {i:"📊",t:"Export Excel",d:"Journal journalier et registre complet en un clic"},
+      {i:"📱",t:"QR Code client",d:"Affichez le QR code — vos clients scannent et commandent"},
+      {i:"⚙️",t:"Espace employé",d:"Gérez les commandes, le stock et la configuration"},
+      {i:"☁️",t:"Sauvegarde cloud",d:"Aucune perte de données, accessible partout"},
+    ];
+    return (
+      <div style={{minHeight:"100vh",background:"#0f172a",color:"#fff"}}>
+        {/* Hero */}
+        <div style={{background:"linear-gradient(135deg,#0f172a,#1e3a5f,#0f172a)",padding:"40px 20px",textAlign:"center"}}>
+          <div style={{fontSize:56,marginBottom:12}}>🌾</div>
+          <div style={{color:"#86efac",fontSize:11,letterSpacing:4,textTransform:"uppercase",marginBottom:8}}>AgriFeed Pro</div>
+          <h1 style={{fontSize:28,fontWeight:800,marginBottom:12,lineHeight:1.2}}>
+            Gérez votre moulin<br/>
+            <span style={{color:"#f59e0b"}}>comme un professionnel</span>
+          </h1>
+          <p style={{color:"#94a3b8",fontSize:14,maxWidth:340,margin:"0 auto 24px",lineHeight:1.7}}>
+            L'application de gestion pour moulins d'aliments pour animaux — commandes, formules, prix, stocks — tout en un. Utilisable partout dans le monde.
+          </p>
+          <div style={{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
+            <div style={{background:"rgba(134,239,172,0.15)",border:"1px solid #86efac",borderRadius:20,padding:"6px 16px",fontSize:12,color:"#86efac"}}>🌍 Disponible dans le monde entier</div>
+            <div style={{background:"rgba(251,191,36,0.15)",border:"1px solid #fbbf24",borderRadius:20,padding:"6px 16px",fontSize:12,color:"#fbbf24"}}>🔥 Données temps réel</div>
+            <div style={{background:"rgba(147,51,234,0.15)",border:"1px solid #9333ea",borderRadius:20,padding:"6px 16px",fontSize:12,color:"#c084fc"}}>📱 100% Mobile</div>
+          </div>
+        </div>
+
+        <div style={{maxWidth:700,margin:"0 auto",padding:"0 16px 40px"}}>
+
+          {/* Problème → Solution */}
+          <div style={{margin:"32px 0"}}>
+            <h2 style={{fontSize:18,fontWeight:700,marginBottom:16,textAlign:"center",color:"#f1f5f9"}}>Le problème des moulins aujourd'hui</h2>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:20}}>
+              {[["📝","Commandes perdues","Carnets oubliés, erreurs de calcul"],["📞","Appels manqués","Clients qui n'arrivent pas à joindre"],["❌","Prix non mis à jour","Calculs manuels, pertes d'argent"],["😤","Désorganisation","Pas de suivi clair des commandes"]].map(function(r){
+                return (
+                  <div key={r[1]} style={{background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.3)",borderRadius:14,padding:"14px 12px"}}>
+                    <div style={{fontSize:24,marginBottom:6}}>{r[0]}</div>
+                    <div style={{fontWeight:700,fontSize:12,marginBottom:3,color:"#fca5a5"}}>{r[1]}</div>
+                    <div style={{fontSize:11,color:"#9ca3af"}}>{r[2]}</div>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{textAlign:"center",fontSize:22,marginBottom:16}}>⬇️</div>
+            <h2 style={{fontSize:18,fontWeight:700,marginBottom:16,textAlign:"center",color:"#86efac"}}>AgriFeed Pro résout tout ça</h2>
+          </div>
+
+          {/* Features */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:32}}>
+            {feats.map(function(f){
+              return (
+                <div key={f.t} style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:16,padding:"16px 14px"}}>
+                  <div style={{fontSize:26,marginBottom:8}}>{f.i}</div>
+                  <div style={{fontWeight:700,fontSize:13,marginBottom:4,color:"#f1f5f9"}}>{f.t}</div>
+                  <div style={{fontSize:11,color:"#94a3b8",lineHeight:1.5}}>{f.d}</div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Disponibilité mondiale */}
+          <div style={{background:"linear-gradient(135deg,rgba(99,102,241,0.15),rgba(168,85,247,0.15))",border:"1px solid rgba(168,85,247,0.3)",borderRadius:20,padding:"22px",marginBottom:32,textAlign:"center"}}>
+            <div style={{fontSize:36,marginBottom:10}}>🌍</div>
+            <h3 style={{fontSize:16,fontWeight:700,marginBottom:8,color:"#e2e8f0"}}>Disponible partout dans le monde</h3>
+            <p style={{fontSize:13,color:"#94a3b8",lineHeight:1.7,marginBottom:14}}>
+              AgriFeed Pro fonctionne dans tous les pays — Côte d'Ivoire, Sénégal, Mali, Cameroun, France, Canada... Partout où il y a un téléphone et internet.
+            </p>
+            <div style={{display:"flex",gap:8,justifyContent:"center",flexWrap:"wrap"}}>
+              {["🇨🇮 Côte d'Ivoire","🇸🇳 Sénégal","🇲🇱 Mali","🇨🇲 Cameroun","🇧🇫 Burkina","🇬🇳 Guinée","🌐 Et partout ailleurs"].map(function(p){
+                return <div key={p} style={{background:"rgba(255,255,255,0.08)",borderRadius:20,padding:"5px 12px",fontSize:11,color:"#c4b5fd"}}>{p}</div>;
+              })}
+            </div>
+          </div>
+
+          {/* Tarifs */}
+          <h2 style={{fontSize:20,fontWeight:700,marginBottom:16,textAlign:"center"}}>💰 Nos tarifs</h2>
+          <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:32}}>
+            {tarifs.map(function(t){
+              return (
+                <div key={t.nom} style={{background:"rgba(255,255,255,0.06)",border:"2px solid "+t.c+"55",borderRadius:20,padding:"20px 22px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:14}}>
+                  <div style={{display:"flex",alignItems:"center",gap:14}}>
+                    <div style={{width:50,height:50,background:t.c+"22",border:"2px solid "+t.c+"55",borderRadius:14,display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,flexShrink:0}}>{t.i}</div>
+                    <div>
+                      <div style={{fontWeight:700,fontSize:15,color:"#f1f5f9",marginBottom:3}}>{t.nom}</div>
+                      <div style={{fontSize:12,color:"#94a3b8"}}>{t.desc}</div>
+                    </div>
+                  </div>
+                  <div style={{textAlign:"right",flexShrink:0}}>
+                    <div style={{fontWeight:800,fontSize:18,color:t.c}}>{t.prix}</div>
+                    <div style={{fontSize:11,color:"#64748b"}}>FCFA{t.once?"":" /mois"}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Témoignage fictif */}
+          <div style={{background:"linear-gradient(135deg,rgba(134,239,172,0.1),rgba(59,130,246,0.1))",border:"1px solid rgba(134,239,172,0.2)",borderRadius:20,padding:"22px",marginBottom:32}}>
+            <div style={{fontSize:32,marginBottom:12}}>💬</div>
+            <p style={{fontSize:14,color:"#cbd5e1",lineHeight:1.8,marginBottom:12,fontStyle:"italic"}}>
+              "Depuis AgriFeed Pro, je ne perds plus aucune commande. Mes clients commandent la nuit, et le matin tout est prêt dans l'app. Mon chiffre d'affaires a augmenté de 30%."
+            </p>
+            <div style={{fontWeight:700,fontSize:13,color:"#86efac"}}>— Grand Moulin D'ATTINGUIE</div>
+            <div style={{fontSize:11,color:"#64748b"}}>Attinguie, Côte d'Ivoire 🇨🇮</div>
+          </div>
+
+          {/* CTA Contact */}
+          <div style={{background:"linear-gradient(135deg,#065f46,#047857)",borderRadius:24,padding:"28px 22px",textAlign:"center",boxShadow:"0 8px 32px rgba(5,150,105,0.4)"}}>
+            <div style={{fontSize:40,marginBottom:12}}>🤝</div>
+            <h3 style={{fontSize:18,fontWeight:700,marginBottom:8}}>Intéressé pour votre moulin ?</h3>
+            <p style={{color:"#a7f3d0",fontSize:13,marginBottom:20,lineHeight:1.6}}>Contactez-nous pour une démonstration gratuite et une installation en 24h</p>
+            <div style={{background:"rgba(255,255,255,0.15)",borderRadius:14,padding:"16px",marginBottom:12}}>
+              <div style={{fontSize:13,color:"#d1fae5",marginBottom:6}}>📞 Appelez ou WhatsApp</div>
+              <div style={{fontWeight:800,fontSize:24,letterSpacing:1,marginBottom:10}}>01 53 25 56 54</div>
+              <div style={{display:"flex",gap:8,justifyContent:"center"}}>
+                <div style={{background:"rgba(0,180,120,0.25)",border:"1px solid #00b478",borderRadius:10,padding:"6px 14px",fontSize:12,color:"#6ee7b7",fontWeight:700}}>💚 Moov Money</div>
+                <div style={{background:"rgba(0,100,220,0.25)",border:"1px solid #0064dc",borderRadius:10,padding:"6px 14px",fontSize:12,color:"#93c5fd",fontWeight:700}}>🌊 Wave</div>
+              </div>
+            </div>
+            <div style={{fontSize:12,color:"#6ee7b7"}}>✅ Démonstration gratuite · Installation en 24h · Support inclus</div>
+          </div>
+        </div>
+
+        {/* Back button */}
+        <div style={{textAlign:"center",padding:"16px 0 32px"}}>
+          <button onClick={goHome} style={{background:"rgba(255,255,255,0.1)",color:"#fff",border:"1px solid rgba(255,255,255,0.2)",borderRadius:20,padding:"10px 28px",cursor:"pointer",fontSize:13,fontWeight:700}}>← Retour</button>
+        </div>
+      </div>
+    );
+  }
+
+  // ══ COMMANDE ══
+  if(view==="commande") {
+    return (
+      <PageWrap moulin={moulin} gc={gc} back={true} goHome={goHome}>
+        {cOk ? (
+          <div style={{...card,textAlign:"center",padding:48}}>
+            <div style={{fontSize:60,marginBottom:12}}>🎉</div>
+            <h2 style={{color:"#059669",marginBottom:6}}>Commande enregistrée !</h2>
+            <div style={{fontSize:22,fontWeight:700,marginBottom:4}}>{cOk.id}</div>
+            <p style={{color:"#6b7280",marginBottom:20}}>Merci <strong>{cOk.client}</strong> — <strong>{cOk.sacs} sacs</strong> de <strong>{FMLS.find(function(f){return f.id===cOk.fId;})?FMLS.find(function(f){return f.id===cOk.fId;}).nom:""}</strong></p>
+            <div style={{background:"#f0faf0",borderRadius:10,padding:"12px 24px",display:"inline-block",marginBottom:22}}>
+              <div style={{fontSize:11,color:"#6b7280"}}>Total estimé</div>
+              <div style={{fontSize:20,fontWeight:700,color:"#059669"}}>{fmt(cOk.sacs*cOk.prix)}</div>
+            </div>
+            <br/>
+            <button style={mkBtn()} onClick={function(){setCOk(null);}}>Nouvelle commande</button>
+          </div>
+        ) : (
+          <div>
+            <h2 style={{fontSize:20,marginBottom:4,color:"#1a2e1a",fontWeight:700}}>📦 Nouvelle Commande</h2>
+            <p style={{color:"#9ca3af",fontSize:12,marginBottom:14}}>Étape {step} / 3</p>
+            <div style={{display:"flex",gap:4,marginBottom:22}}>
+              {[1,2,3].map(function(s){ return <div key={s} style={{flex:1,height:5,borderRadius:3,background:step>=s?gc:"#e5e7eb"}}/>; })}
+            </div>
+
+            {step===1 && (
+              <div style={card}>
+                <h3 style={{marginBottom:16,color:"#1a2e1a"}}>👤 Vos informations</h3>
+                <div style={{marginBottom:12}}>
+                  <label style={lbl}>Nom complet *</label>
+                  <input style={inp} placeholder="Ex: Konan Yao" value={cForm.client} onChange={function(e){setCForm(Object.assign({},cForm,{client:e.target.value}));}}/>
+                </div>
+                <div style={{marginBottom:20}}>
+                  <label style={lbl}>Téléphone *</label>
+                  <input style={inp} placeholder="07 00 00 00 00" value={cForm.tel} onChange={function(e){setCForm(Object.assign({},cForm,{tel:e.target.value}));}}/>
+                </div>
+                <button style={Object.assign({},mkBtn(),{opacity:(!cForm.client||!cForm.tel)?0.45:1})} disabled={!cForm.client||!cForm.tel} onClick={function(){setStep(2);}}>Continuer →</button>
+              </div>
+            )}
+
+            {step===2 && (
+              <div style={card}>
+                <h3 style={{marginBottom:16,color:"#1a2e1a"}}>🌾 Choisir l'aliment</h3>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(185px,1fr))",gap:10,marginBottom:18}}>
+                  {FMLS.map(function(f) {
+                    var p = calcP(f,mats,customFmls), sel = cForm.fId===f.id;
+                    return (
+                      <div key={f.id} onClick={function(){setCForm(Object.assign({},cForm,{fId:f.id}));}} style={{border:"2px solid "+(sel?f.c:"#e5e7eb"),borderRadius:12,padding:14,cursor:"pointer",background:sel?f.bg:"#fff"}}>
+                        <div style={{fontSize:28,marginBottom:6}}>{f.e}</div>
+                        <div style={{fontWeight:700,fontSize:13,marginBottom:3}}>{f.nom}</div>
+                        <div style={{fontSize:11,color:"#6b7280",marginBottom:6}}>{f.phase}</div>
+                        <div style={{fontWeight:700,color:f.c,fontSize:14}}>{fmt(p)} / sac</div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{display:"flex",gap:8}}>
+                  <button style={mkBtnO()} onClick={function(){setStep(1);}}>← Retour</button>
+                  <button style={Object.assign({},mkBtn(),{opacity:!cForm.fId?0.45:1})} disabled={!cForm.fId} onClick={function(){setStep(3);}}>Continuer →</button>
+                </div>
+              </div>
+            )}
+
+            {step===3 && selF && (
+              <div style={card}>
+                <h3 style={{marginBottom:16,color:"#1a2e1a"}}>📊 Quantité & Confirmation</h3>
+                <div style={{background:selF.bg,borderRadius:10,padding:12,marginBottom:14,display:"flex",alignItems:"center",gap:10}}>
+                  <span style={{fontSize:26}}>{selF.e}</span>
+                  <div style={{flex:1}}><div style={{fontWeight:700}}>{selF.nom}</div><div style={{fontSize:11,color:"#6b7280"}}>{selF.phase}</div></div>
+                  <div style={{textAlign:"right"}}><div style={{fontSize:10,color:"#6b7280"}}>Prix / sac</div><div style={{fontWeight:700,color:selF.c,fontSize:15}}>{fmt(pSac)}</div></div>
+                </div>
+                <div style={{marginBottom:12}}>
+                  <label style={lbl}>Nombre de sacs *</label>
+                  <input type="number" min="1" style={inp} value={cForm.sacs} onChange={function(e){setCForm(Object.assign({},cForm,{sacs:parseInt(e.target.value)||1}));}}/>
+                  <div style={{fontSize:11,color:"#9ca3af",marginTop:3}}>Poids total : {(cForm.sacs*50).toLocaleString("fr-FR")} kg</div>
+                </div>
+                <div style={{marginBottom:16}}>
+                  <label style={lbl}>Note (optionnel)</label>
+                  <textarea style={Object.assign({},inp,{minHeight:58,resize:"vertical"})} placeholder="Livraison, heure..." value={cForm.note} onChange={function(e){setCForm(Object.assign({},cForm,{note:e.target.value}));}}/>
+                </div>
+                <div style={{background:"#f9fafb",borderRadius:10,padding:14,marginBottom:14}}>
+                  {[["Client",cForm.client],["Téléphone",cForm.tel],["Produit",selF.nom],["Quantité",cForm.sacs+" sacs"],["Prix/sac",fmt(pSac)]].map(function(row){
+                    return (
+                      <div key={row[0]} style={{display:"flex",justifyContent:"space-between",fontSize:13,paddingBottom:5,marginBottom:5,borderBottom:"1px solid #e5e7eb"}}>
+                        <span style={{color:"#6b7280"}}>{row[0]}</span><span style={{fontWeight:700}}>{row[1]}</span>
+                      </div>
+                    );
+                  })}
+                  <div style={{display:"flex",justifyContent:"space-between",fontWeight:700,fontSize:15,marginTop:6}}>
+                    <span>TOTAL ESTIMÉ</span><span style={{color:gc}}>{fmt(pSac*cForm.sacs)}</span>
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:8}}>
+                  <button style={mkBtnO()} onClick={function(){setStep(2);}}>← Retour</button>
+                  <button style={mkBtn()} onClick={submitOrder}>✅ Confirmer</button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </PageWrap>
+    );
+  }
+
+  // ══ FORMULE (avec calculateur temps réel) ══
+  if(view==="formule") {
+    var totalDevis  = calcDevis(fForm.ings);
+    var ingsFilled  = fForm.ings.filter(function(x){ return x.nom&&x.qte&&x.pu; });
+    var canSubmit   = fForm.client&&fForm.tel&&fForm.animal;
+
+    if(fOk) {
+      return (
+        <PageWrap moulin={moulin} gc={gc} back={true} goHome={goHome}>
+          <div style={Object.assign({},card,{textAlign:"center",padding:48})}>
+            <div style={{fontSize:60,marginBottom:12}}>✅</div>
+            <h2 style={{color:"#7C3AED",marginBottom:8}}>Formule envoyée !</h2>
+            <p style={{color:"#6b7280",marginBottom:24,lineHeight:1.7}}>
+              Votre formule et votre devis ont été transmis au moulin.<br/>
+              Vous serez contacté dès que la production est terminée.
+            </p>
+            <button style={mkBtn("#7C3AED")} onClick={goHome}>Retour à l'accueil</button>
+          </div>
+        </PageWrap>
+      );
+    }
+
+    return (
+      <PageWrap moulin={moulin} gc={gc} back={true} goHome={goHome}>
+        <h2 style={{fontSize:20,marginBottom:4,color:"#1a2e1a",fontWeight:700}}>🔬 Formule personnalisée</h2>
+        <p style={{color:"#9ca3af",fontSize:12,marginBottom:16}}>Saisissez vos ingrédients — le devis se calcule automatiquement</p>
+
+        {/* Infos client */}
+        <div style={card}>
+          <h3 style={{marginBottom:16,color:"#1a2e1a"}}>👤 Vos informations</h3>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+            <div>
+              <label style={lbl}>Nom *</label>
+              <input style={inp} value={fForm.client} onChange={function(e){setFForm(Object.assign({},fForm,{client:e.target.value}));}}/>
+            </div>
+            <div>
+              <label style={lbl}>Téléphone *</label>
+              <input style={inp} value={fForm.tel} onChange={function(e){setFForm(Object.assign({},fForm,{tel:e.target.value}));}}/>
+            </div>
+          </div>
+          <label style={lbl}>Type d'animal *</label>
+          <input style={inp} placeholder="Ex: Poulet, Porc, Lapin..." value={fForm.animal} onChange={function(e){setFForm(Object.assign({},fForm,{animal:e.target.value}));}}/>
+        </div>
+
+        {/* Calculateur */}
+        <div style={card}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+            <h3 style={{color:"#1a2e1a"}}>🧪 Ingrédients & Calcul du Devis</h3>
+            {totalDevis>0 && (
+              <div style={{background:"#EDE9FE",borderRadius:10,padding:"6px 14px",fontSize:13,fontWeight:700,color:"#7C3AED"}}>
+                Total : {Math.round(totalDevis).toLocaleString("fr-FR")} FCFA
+              </div>
+            )}
+          </div>
+
+          {/* En-têtes */}
+          <div style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr 1fr 28px",gap:6,marginBottom:8}}>
+            {["Ingrédient","Quantité","Unité","Prix unitaire","= Total",""].map(function(h,i){
+              return <div key={i} style={{fontSize:10,color:"#6b7280",fontWeight:700,textTransform:"uppercase"}}>{h}</div>;
+            })}
+          </div>
+
+          {/* Lignes ingrédients */}
+          {fForm.ings.map(function(ing, i) {
+            var q = parseFloat(ing.qte)||0;
+            var p = parseFloat(ing.pu)||0;
+            var tl = q*p;
+            return (
+              <div key={i} style={{display:"grid",gridTemplateColumns:"2fr 1fr 1fr 1fr 1fr 28px",gap:6,marginBottom:7,alignItems:"center"}}>
+                <select style={Object.assign({},inp,{padding:"8px 10px",fontSize:13,background:"#fff"})} value={ing.nom} onChange={function(e){
+                    var nom=e.target.value;
+                    var a=fForm.ings.slice(); a[i]=Object.assign({},a[i],{nom:nom,pu:a[i].pu||(prixIngs[nom]||"")});
+                    setFForm(Object.assign({},fForm,{ings:a}));
+                  }}>
+                  <option value="">— Choisir —</option>
+                  {ING_LIST.map(function(n){ return <option key={n} value={n}>{n}</option>; })}
+                </select>
+                <input type="number" min="0" step="any" style={Object.assign({},inp,{padding:"8px 10px",fontSize:13,textAlign:"right"})} placeholder="0" value={ing.qte} onChange={function(e){updIng(i,"qte",e.target.value);}}/>
+                <select style={Object.assign({},inp,{padding:"8px 10px",fontSize:13,background:"#fff"})} value={ing.u} onChange={function(e){updIng(i,"u",e.target.value);}}>
+                  {UNITES.map(function(u){ return <option key={u} value={u}>{u}</option>; })}
+                </select>
+                {prixIngs[ing.nom] ? (
+                  <div style={{background:"#F5F3FF",border:"2px solid #7C3AED",borderRadius:10,padding:"8px 12px",fontSize:14,fontWeight:700,color:"#7C3AED",textAlign:"right",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                    <span style={{fontSize:11,color:"#9ca3af"}}>🔒</span>
+                    <span>{parseInt(prixIngs[ing.nom]).toLocaleString("fr-FR")} FCFA</span>
+                  </div>
+                ) : (
+                  <input type="number" min="0" step="any" style={Object.assign({},inp,{padding:"8px 10px",fontSize:13,textAlign:"right",borderColor:ing.pu?"#7C3AED":"#e2e8e2"})} placeholder="0 FCFA" value={ing.pu} onChange={function(e){updIng(i,"pu",e.target.value);}}/>
+                )}
+                <div style={{background:tl>0?"#EDE9FE":"#f9fafb",borderRadius:9,padding:"8px 6px",fontSize:12,fontWeight:700,color:tl>0?"#7C3AED":"#9ca3af",textAlign:"center",display:"flex",alignItems:"center",justifyContent:"center",minHeight:38}}>
+                  {tl>0 ? Math.round(tl).toLocaleString("fr-FR") : "—"}
+                </div>
+                {fForm.ings.length>1
+                  ? <button onClick={function(){delIng(i);}} style={{background:"#FEE2E2",color:"#EF4444",border:"none",borderRadius:6,width:28,height:28,cursor:"pointer",fontSize:14,padding:0}}>✕</button>
+                  : <div/>
+                }
+              </div>
+            );
+          })}
+
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:10,paddingTop:10,borderTop:"1px solid #f3f4f6"}}>
+            <button onClick={addIng} style={Object.assign({},mkBtnO("#7C3AED"),{fontSize:12,padding:"7px 14px"})}>+ Ajouter un ingrédient</button>
+            {totalDevis>0 && (
+              <div style={{textAlign:"right"}}>
+                <div style={{fontSize:10,color:"#6b7280",marginBottom:2}}>TOTAL DEVIS ESTIMÉ</div>
+                <div style={{fontSize:22,fontWeight:700,color:"#7C3AED"}}>{Math.round(totalDevis).toLocaleString("fr-FR")} FCFA</div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Récapitulatif tableau */}
+        {ingsFilled.length>0 && (
+          <div style={Object.assign({},card,{background:"#F5F3FF",border:"2px solid #7C3AED"})}>
+            <h4 style={{color:"#5B21B6",marginBottom:12,fontSize:14}}>📋 Récapitulatif de votre devis</h4>
+            <table>
+              <thead>
+                <tr style={{background:"#EDE9FE"}}>
+                  {["Ingrédient","Qté","Unité","Prix unitaire","Total"].map(function(h,i){
+                    return <th key={h} style={{padding:"7px 10px",textAlign:i===0?"left":"right",fontWeight:700,color:"#5B21B6",fontSize:11}}>{h}</th>;
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {ingsFilled.map(function(ing,i){
+                  var q=parseFloat(ing.qte), p=parseFloat(ing.pu), t=q*p;
+                  return (
+                    <tr key={i} style={{borderBottom:"1px solid #DDD6FE",background:i%2===0?"#fff":"#faf5ff"}}>
+                      <td style={{padding:"7px 10px",fontWeight:700}}>{ing.nom}</td>
+                      <td style={{padding:"7px 10px",textAlign:"right"}}>{q}</td>
+                      <td style={{padding:"7px 10px",textAlign:"right",color:"#6b7280"}}>{ing.u}</td>
+                      <td style={{padding:"7px 10px",textAlign:"right"}}>{p.toLocaleString("fr-FR")} FCFA</td>
+                      <td style={{padding:"7px 10px",textAlign:"right",fontWeight:700,color:"#7C3AED"}}>{Math.round(t).toLocaleString("fr-FR")} FCFA</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot>
+                <tr style={{background:"#7C3AED"}}>
+                  <td colSpan={4} style={{padding:"9px 10px",color:"#fff",fontWeight:700,fontSize:13}}>TOTAL ESTIMÉ</td>
+                  <td style={{padding:"9px 10px",textAlign:"right",color:"#fff",fontWeight:700,fontSize:15}}>{Math.round(totalDevis).toLocaleString("fr-FR")} FCFA</td>
+                </tr>
+              </tfoot>
+            </table>
+            <div style={{marginTop:10,fontSize:11,color:"#7C3AED",opacity:0.8}}>⚠️ Estimation — le moulin confirmera le montant final.</div>
+          </div>
+        )}
+
+        {/* Document & message */}
+        <div style={card}>
+          <h3 style={{marginBottom:14,color:"#1a2e1a"}}>📎 Document & Message</h3>
+          <div style={{marginBottom:14}}>
+            <label style={lbl}>Joindre un fichier (optionnel)</label>
+            <label style={{display:"flex",alignItems:"center",gap:10,border:"2px dashed #d1d5db",borderRadius:9,padding:"14px 16px",cursor:"pointer",background:fForm.fichier?"#f0faf0":"#fafafa"}}>
+              <span style={{fontSize:22}}>{fForm.fichier?"📄":"📁"}</span>
+              <div>
+                <div style={{fontWeight:700,fontSize:12,color:fForm.fichier?"#059669":"#374151"}}>{fForm.fichier||"Cliquez pour sélectionner"}</div>
+                <div style={{fontSize:10,color:"#9ca3af"}}>PDF, Word, Excel, Image</div>
+              </div>
+              <input type="file" style={{display:"none"}} onChange={function(e){setFForm(Object.assign({},fForm,{fichier:e.target.files[0]?e.target.files[0].name:""}));}}/>
+            </label>
+          </div>
+          <label style={lbl}>Message (optionnel)</label>
+          <textarea style={Object.assign({},inp,{minHeight:76,resize:"vertical"})} placeholder="Précisez vos attentes, délais souhaités..." value={fForm.desc} onChange={function(e){setFForm(Object.assign({},fForm,{desc:e.target.value}));}}/>
+        </div>
+
+        <button style={Object.assign({},mkBtn("#7C3AED"),{width:"100%",padding:13,fontSize:14,opacity:canSubmit?1:0.45})} disabled={!canSubmit} onClick={submitFC}>
+          🚀 Envoyer ma formule + devis au moulin
+        </button>
+      </PageWrap>
+    );
+  }
+
+  // ══ ADMIN LOGIN ══
+  if(view==="admin" && !adminOk) {
+    return (
+      <PageWrap moulin={moulin} gc={gc} back={true} goHome={goHome}>
+        <div style={{maxWidth:360,margin:"40px auto"}}>
+          <div style={Object.assign({},card,{textAlign:"center"})}>
+            <div style={{fontSize:44,marginBottom:10}}>🔐</div>
+            <h2 style={{color:"#1a2e1a",marginBottom:4}}>Espace Employé</h2>
+            <p style={{color:"#9ca3af",fontSize:12,marginBottom:18}}>Entrez le code d'accès</p>
+            <input type="password" maxLength={6} style={Object.assign({},inp,{textAlign:"center",fontSize:22,letterSpacing:8,marginBottom:10})}
+              placeholder="••••" value={aCode}
+              onChange={function(e){setACode(e.target.value);setAErr(false);}}
+              onKeyDown={function(e){if(e.key==="Enter"){if(aCode===employeePin){setAdminOk(true);setACode("");}else{setAErr(true);}}}}/>
+            {aErr && <div style={{color:"#EF4444",fontSize:12,marginBottom:8}}>Code incorrect.</div>}
+            <button style={Object.assign({},mkBtn(),{width:"100%"})} onClick={function(){if(aCode===employeePin){setAdminOk(true);setACode("");}else{setAErr(true);}}}>Accéder</button>
+            <p style={{fontSize:10,color:"#d1d5db",marginTop:12}}>Code par défaut : 1234</p>
+          </div>
+        </div>
+      </PageWrap>
+    );
+  }
+
+  // ══ ADMIN PANEL ══
+  var stats = {
+    att:  orders.filter(function(o){return o.status==="en_attente";}).length,
+    prod: orders.filter(function(o){return o.status==="en_production";}).length,
+    pret: orders.filter(function(o){return o.status==="pret";}).length,
+  };
+
+  return (
+    <PageWrap moulin={moulin} gc={gc} back={false} goHome={goHome} wide={true}>
+
+      {/* Firebase status */}
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14,background:fbOk?"#D1FAE5":"#FEF3C7",border:"1px solid "+(fbOk?"#059669":"#F59E0B"),borderRadius:14,padding:"9px 18px",fontSize:12,color:fbOk?"#065F46":"#92400E",fontWeight:700}}>
+        <span style={{fontSize:16}}>{fbOk?"🔥":"⏳"}</span>
+        <span>{fbOk?"Firebase connecté — toutes les données sont synchronisées en temps réel ✅":"Connexion Firebase en cours... (activez Firestore si ce message persiste)"}</span>
+      </div>
+
+      {/* Stats */}
+      <div style={{display:"flex",gap:8,marginBottom:18,flexWrap:"wrap"}}>
+        {[{l:"En attente",v:stats.att,c:"#D97706",i:"⏳"},{l:"En production",v:stats.prod,c:"#2563EB",i:"⚙️"},{l:"Prêt",v:stats.pret,c:"#059669",i:"✅"},{l:"Formules",v:nbFC,c:"#7C3AED",i:"🔬"}].map(function(s){
+          return (
+            <div key={s.l} style={{flex:1,minWidth:110,background:"#fff",borderRadius:20,padding:"18px 20px",boxShadow:"0 6px 22px rgba(45,110,45,0.15)",borderLeft:"6px solid "+s.c}}>
+              <div style={{fontSize:22}}>{s.i}</div>
+              <div style={{fontSize:26,fontWeight:700,color:s.c,lineHeight:1.1}}>{s.v}</div>
+              <div style={{fontSize:12,color:"#9ca3af",marginTop:2}}>{s.l}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Tabs */}
+      <div style={{display:"flex",gap:5,marginBottom:22,background:"#fff",borderRadius:20,padding:7,boxShadow:"0 4px 18px rgba(45,110,45,0.14)",flexWrap:"wrap"}}>
+        {[{id:"commandes",l:"📋 Commandes"},{id:"fc",l:"🔬 Formules"+(nbFC>0?" ("+nbFC+")":"")},{id:"matieres",l:"💰 Prix matières"},{id:"prixvente",l:"🏷️ Prix de vente"},{id:"prixings",l:"🧪 Prix ingrédients"},{id:"formules",l:"📊 Formules std"},{id:"excel",l:"📥 Excel"},{id:"qr",l:"📱 QR Code"},{id:"config",l:"⚙️ Moulin"}].map(function(t){
+          return <button key={t.id} onClick={function(){setTab(t.id);}} style={{background:tab===t.id?gc:"transparent",color:tab===t.id?"#fff":"#6b7280",border:"none",borderRadius:10,padding:"9px 16px",cursor:"pointer",fontWeight:700,fontSize:13}}>{t.l}</button>;
+        })}
+      </div>
+
+      {/* ── Commandes ── */}
+      {tab==="commandes" && (
+        <div>
+          {orders.length===0 && <div style={Object.assign({},card,{textAlign:"center",color:"#9ca3af",padding:36})}>Aucune commande</div>}
+          {orders.map(function(o){
+            var f = FMLS.find(function(f){return f.id===o.fId;});
+            var st = ST[o.status];
+            return (
+              <div key={o.id} style={Object.assign({},card,{borderLeft:"4px solid "+st.color})}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:10}}>
+                  <div style={{flex:1}}>
+                    <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:5,flexWrap:"wrap"}}>
+                      <span style={{fontWeight:700,fontSize:15}}>{o.client}</span>
+                      <span style={{background:st.bg,color:st.color,padding:"3px 11px",borderRadius:20,fontSize:11,fontWeight:700}}>{st.icon} {st.label}</span>
+                      <span style={{fontSize:10,color:"#9ca3af"}}>{o.id} · {o.date}</span>
+                    </div>
+                    <div style={{fontSize:13,marginBottom:2}}>{f?f.e:""} <strong>{f?f.nom:""}</strong> — <strong>{o.sacs} sacs</strong> × {fmt(o.prix)}</div>
+                    {o.note && <div style={{fontSize:11,color:"#6b7280"}}>📝 {o.note}</div>}
+                    <div style={{fontSize:11,color:"#6b7280"}}>📞 {o.tel}</div>
+                  </div>
+                  <div style={{textAlign:"right"}}>
+                    <div style={{fontSize:16,fontWeight:700,color:gc,marginBottom:8}}>{fmt(o.sacs*o.prix)}</div>
+                    <div style={{display:"flex",gap:7}}>
+                      {NEXT[o.status] && (
+                        <button onClick={function(){fbUpdate("orders",o.id,{status:NEXT[o.status]});setOrders(function(p){return p.map(function(x){return x.id===o.id?Object.assign({},x,{status:NEXT[o.status]}):x;});});}} style={{background:ST[NEXT[o.status]].bg,color:ST[NEXT[o.status]].color,border:"1px solid "+ST[NEXT[o.status]].color,borderRadius:7,padding:"5px 10px",cursor:"pointer",fontSize:11,fontWeight:700}}>
+                          {ST[NEXT[o.status]].icon} {ST[NEXT[o.status]].label}
+                        </button>
+                      )}
+                      {o.status!=="livre" && o.status!=="annulee" && (
+                        <button onClick={function(){fbUpdate("orders",o.id,{status:"annulee"});setOrders(function(p){return p.map(function(x){return x.id===o.id?Object.assign({},x,{status:"annulee"}):x;});});}} style={{background:"#FEE2E2",color:"#EF4444",border:"1px solid #EF4444",borderRadius:7,padding:"5px 8px",cursor:"pointer",fontSize:11}}>✕</button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── Formules clients ── */}
+      {tab==="fc" && (
+        <div>
+          {fClients.length===0 && <div style={Object.assign({},card,{textAlign:"center",color:"#9ca3af",padding:40})}><div style={{fontSize:36,marginBottom:8}}>🔬</div>Aucune formule reçue.</div>}
+          {fClients.map(function(fc){
+            var st = ST_FC[fc.status] || ST_FC.en_attente;
+            var hasNext = fc.status==="en_attente" || fc.status==="en_cours";
+            var nextLbl = fc.status==="en_attente" ? "▶ Démarrer production" : "✅ Marquer Terminé";
+            var nextC   = fc.status==="en_attente" ? "#2563EB" : "#059669";
+            return (
+              <div key={fc.id} style={Object.assign({},card,{borderLeft:"4px solid "+st.color})}>
+                {/* En-tête */}
+                <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:10,marginBottom:12}}>
+                  <div>
+                    <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:4,flexWrap:"wrap"}}>
+                      <span style={{fontWeight:700,fontSize:15}}>{fc.client}</span>
+                      <span style={{background:st.bg,color:st.color,padding:"3px 11px",borderRadius:18,fontSize:11,fontWeight:700}}>{st.icon} {st.label}</span>
+                      <span style={{fontSize:10,color:"#9ca3af"}}>{fc.id} · {fc.date}</span>
+                    </div>
+                    <div style={{fontSize:13}}>🐾 <strong>{fc.animal}</strong> · 📞 {fc.tel}</div>
+                  </div>
+                  {hasNext && (
+                    <button onClick={function(){advanceFC(fc.id,fc.status);}} style={{background:nextC,color:"#fff",border:"none",borderRadius:8,padding:"8px 16px",cursor:"pointer",fontSize:12,fontWeight:700,boxShadow:"0 3px 8px "+nextC+"44"}}>
+                      {nextLbl}
+                    </button>
+                  )}
+                </div>
+
+                {/* Tableau devis */}
+                {fc.ings && fc.ings.length>0 && (
+                  <div style={{marginBottom:10}}>
+                    <div style={{fontSize:11,fontWeight:700,color:"#6b7280",textTransform:"uppercase",letterSpacing:0.4,marginBottom:6}}>📋 Devis du client</div>
+                    <table>
+                      <thead>
+                        <tr style={{background:"#F5F3FF"}}>
+                          {["Ingrédient","Quantité","Unité","Prix unitaire","Total"].map(function(h,i){
+                            return <th key={h} style={{padding:"6px 8px",textAlign:i===0?"left":"right",color:"#7C3AED",fontWeight:700,fontSize:11}}>{h}</th>;
+                          })}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {fc.ings.map(function(ig,i){
+                          var q=parseFloat(ig.qte)||0, p=parseFloat(ig.pu)||0, t=q*p;
+                          return (
+                            <tr key={i} style={{borderBottom:"1px solid #EDE9FE",background:i%2===0?"#fff":"#faf5ff"}}>
+                              <td style={{padding:"6px 8px",fontWeight:700}}>{ig.nom}</td>
+                              <td style={{padding:"6px 8px",textAlign:"right"}}>{ig.qte}</td>
+                              <td style={{padding:"6px 8px",textAlign:"right",color:"#9ca3af"}}>{ig.u}</td>
+                              <td style={{padding:"6px 8px",textAlign:"right"}}>{p>0?p.toLocaleString("fr-FR")+" FCFA":"—"}</td>
+                              <td style={{padding:"6px 8px",textAlign:"right",fontWeight:700,color:t>0?"#7C3AED":"#9ca3af"}}>{t>0?Math.round(t).toLocaleString("fr-FR")+" FCFA":"—"}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                      {fc.total>0 && (
+                        <tfoot>
+                          <tr style={{background:"#7C3AED"}}>
+                            <td colSpan={4} style={{padding:"7px 8px",color:"#fff",fontWeight:700}}>TOTAL ESTIMÉ</td>
+                            <td style={{padding:"7px 8px",textAlign:"right",color:"#fff",fontWeight:700,fontSize:14}}>{Math.round(fc.total).toLocaleString("fr-FR")} FCFA</td>
+                          </tr>
+                        </tfoot>
+                      )}
+                    </table>
+                  </div>
+                )}
+
+                {fc.desc && <div style={{background:"#F5F3FF",borderRadius:8,padding:"8px 12px",fontSize:12,marginBottom:6}}>💬 {fc.desc}</div>}
+                {fc.fichier && <div style={{background:"#f0faf0",borderRadius:8,padding:"6px 12px",fontSize:11,color:"#059669",marginBottom:6}}>📎 {fc.fichier}</div>}
+
+                {/* Message production terminée */}
+                {fc.status==="termine" && fc.notif && (
+                  <div style={{background:"#D1FAE5",border:"1px solid #059669",borderRadius:8,padding:"10px 14px",fontSize:12,color:"#065F46",marginTop:6}}>
+                    <div style={{fontWeight:700,marginBottom:4}}>📱 Message à envoyer au client ({fc.tel})</div>
+                    <div style={{fontStyle:"italic",marginBottom:8,lineHeight:1.6}}>"{fc.notif}"</div>
+                    <button onClick={function(){if(navigator.clipboard){navigator.clipboard.writeText(fc.notif);}}} style={{background:"#059669",color:"#fff",border:"none",borderRadius:6,padding:"5px 14px",cursor:"pointer",fontSize:11,fontWeight:700}}>
+                      📋 Copier le message
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── Prix matières ── */}
+      {tab==="matieres" && (
+        <div style={card}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+            <h3 style={{color:"#1a2e1a"}}>💰 Prix des Matières Premières</h3>
+            <span style={{fontSize:10,color:"#9ca3af"}}>{today()}</span>
+          </div>
+          {mats.map(function(m){
+            return (
+              <div key={m.id} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 0",borderBottom:"1px solid #f3f4f6"}}>
+                <div style={{flex:1,fontWeight:700,fontSize:13}}>{m.nom}</div>
+                <div style={{fontSize:11,color:"#9ca3af",width:40}}>/{m.u}</div>
+                {editP[m.id]!==undefined ? (
+                  <div style={{display:"flex",gap:7,alignItems:"center"}}>
+                    <input type="number" min="0" style={Object.assign({},inp,{width:100,padding:"5px 8px"})} value={editP[m.id]} autoFocus onChange={function(e){setEditP(function(p){return Object.assign({},p,{[m.id]:e.target.value});});}} onKeyDown={function(e){if(e.key==="Enter"){saveP(m.id);}}}/>
+                    <button style={Object.assign({},mkBtn(),{padding:"5px 12px",fontSize:11})} onClick={function(){saveP(m.id);}}>✓</button>
+                    <button style={Object.assign({},mkBtnO("#6b7280"),{padding:"4px 10px",fontSize:11})} onClick={function(){setEditP(function(p){var n=Object.assign({},p);delete n[m.id];return n;});}}>✕</button>
+                  </div>
+                ) : (
+                  <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                    <div style={{fontWeight:700,color:gc,fontSize:13,width:120,textAlign:"right"}}>{m.p.toLocaleString("fr-FR")} FCFA</div>
+                    <button onClick={function(){setEditP(function(p){return Object.assign({},p,{[m.id]:m.p});});}} style={{background:"#f3f4f6",border:"none",borderRadius:6,padding:"4px 10px",cursor:"pointer",fontSize:12,color:"#6b7280"}}>✏️</button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          <div style={{marginTop:10,padding:10,background:"#FEF9EE",borderRadius:8,fontSize:11,color:"#92400E"}}>
+            ⚠️ La modification des prix recalcule le coût de tous les aliments.
+          </div>
+        </div>
+      )}
+
+      {/* ── Prix de vente ── */}
+      {tab==="prixvente" && (
+        <div>
+          <div style={Object.assign({},card,{background:"linear-gradient(135deg,#f0fdf4,#dcfce7)",border:"1px solid #86efac"})}>
+            <h3 style={{color:"#166534",marginBottom:4,fontSize:15}}>🏷️ Prix de vente par sac</h3>
+            <p style={{fontSize:12,color:"#4b5563",marginBottom:14}}>Définissez le prix que vos clients voient lors d'une commande. Laissez vide pour utiliser le coût calculé.</p>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:10}}>
+              {FMLS.map(function(f){
+                var cout=Math.round(calcP(f,mats,customFmls)), pv=prixVente[f.id]||"";
+                return (
+                  <div key={f.id} style={{background:"#fff",borderRadius:14,padding:16,border:"2px solid "+(prixVente[f.id]?gc:"#e5e7eb")}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+                      <span style={{fontSize:24}}>{f.e}</span>
+                      <div><div style={{fontWeight:700,fontSize:13}}>{f.nom}</div><div style={{fontSize:10,color:"#9ca3af"}}>{f.phase}</div></div>
+                    </div>
+                    <label style={{display:"block",fontSize:10,color:"#6b7280",fontWeight:700,textTransform:"uppercase",marginBottom:5}}>Prix de vente / sac (FCFA)</label>
+                    <input type="number" min="0" style={Object.assign({},inp,{fontSize:14,fontWeight:700,borderColor:prixVente[f.id]?gc:"#e2e8e2",textAlign:"right",marginBottom:6})}
+                      placeholder={cout.toLocaleString("fr-FR")+" (coût)"}
+                      value={pv}
+                      onChange={function(e){
+                        var val=e.target.value;
+                        setPrixVente(function(prev){
+                          var n=Object.assign({},prev);
+                          if(val===""||isNaN(parseFloat(val))){ delete n[f.id]; }
+                          else { n[f.id]=Math.round(parseFloat(val)); }
+                          fbSave("config","prixVente",n);
+                          return n;
+                        });
+                      }}/>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:11}}>
+                      <span style={{color:"#9ca3af"}}>Coût : {fmt(cout)}</span>
+                      {prixVente[f.id] && <span style={{color:prixVente[f.id]>cout?"#059669":"#ef4444",fontWeight:700}}>{prixVente[f.id]>cout?"📈 +"+(prixVente[f.id]-cout).toLocaleString("fr-FR"):"📉 "+(prixVente[f.id]-cout).toLocaleString("fr-FR")} FCFA</span>}
+                    </div>
+                    {prixVente[f.id] && <button onClick={function(){setPrixVente(function(p){var n=Object.assign({},p);delete n[f.id];fbSave("config","prixVente",n);return n;});}} style={{marginTop:8,background:"#FEE2E2",color:"#EF4444",border:"none",borderRadius:7,padding:"4px 12px",cursor:"pointer",fontSize:11}}>✕ Réinitialiser</button>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Prix ingrédients ── */}
+      {tab==="prixings" && (
+        <div>
+          <div style={Object.assign({},card,{background:"linear-gradient(135deg,#F5F3FF,#EDE9FE)",border:"1px solid #C4B5FD",marginBottom:18})}>
+            <h3 style={{color:"#5B21B6",marginBottom:4,fontSize:15}}>🧪 Prix des ingrédients clients</h3>
+            <p style={{fontSize:12,color:"#4b5563"}}>Ces prix s'affichent automatiquement quand un client sélectionne un ingrédient dans <strong>Ma formule</strong>. Le client ne peut pas les modifier.</p>
+          </div>
+          <div style={card}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:8}}>
+              {ING_LIST.map(function(nom){
+                var pAct=prixIngs[nom]||"", enEdit=editIngP[nom]!==undefined;
+                return (
+                  <div key={nom} style={{display:"flex",alignItems:"center",gap:8,padding:"10px 14px",background:pAct?"#F5F3FF":"#f9fafb",borderRadius:12,border:"2px solid "+(pAct?"#7C3AED":"#e5e7eb")}}>
+                    <div style={{flex:1}}>
+                      <div style={{fontWeight:700,fontSize:13,color:"#1a2e1a",marginBottom:2}}>{nom}</div>
+                      {!enEdit && pAct && <div style={{fontSize:12,color:"#7C3AED",fontWeight:700}}>{parseInt(pAct).toLocaleString("fr-FR")} FCFA 🔒</div>}
+                      {!enEdit && !pAct && <div style={{fontSize:11,color:"#9ca3af"}}>Prix non défini</div>}
+                      {enEdit && (
+                        <div style={{display:"flex",gap:5,marginTop:4,alignItems:"center"}}>
+                          <input type="number" min="0" autoFocus
+                            style={{border:"2px solid #7C3AED",borderRadius:7,padding:"5px 8px",fontSize:13,width:100,outline:"none",textAlign:"right"}}
+                            value={editIngP[nom]}
+                            onChange={function(e){setEditIngP(function(p){return Object.assign({},p,{[nom]:e.target.value});});}}
+                            onKeyDown={function(e){
+                              if(e.key==="Enter"){
+                                var v=parseFloat(editIngP[nom]);
+                                setPrixIngs(function(p){var n=Object.assign({},p);if(!isNaN(v)&&v>0){n[nom]=Math.round(v);}else{delete n[nom];}fbSave("config","prixIngs",n);return n;});
+                                setEditIngP(function(p){var n=Object.assign({},p);delete n[nom];return n;});
+                              }
+                              if(e.key==="Escape"){setEditIngP(function(p){var n=Object.assign({},p);delete n[nom];return n;});}
+                            }}/>
+                          <button onClick={function(){
+                            var v=parseFloat(editIngP[nom]);
+                            setPrixIngs(function(p){var n=Object.assign({},p);if(!isNaN(v)&&v>0){n[nom]=Math.round(v);}else{delete n[nom];}fbSave("config","prixIngs",n);return n;});
+                            setEditIngP(function(p){var n=Object.assign({},p);delete n[nom];return n;});
+                          }} style={{background:"#7C3AED",color:"#fff",border:"none",borderRadius:6,padding:"5px 8px",cursor:"pointer",fontSize:13,fontWeight:700}}>✓</button>
+                          <button onClick={function(){setEditIngP(function(p){var n=Object.assign({},p);delete n[nom];return n;});}} style={{background:"#f3f4f6",color:"#6b7280",border:"none",borderRadius:6,padding:"5px 8px",cursor:"pointer",fontSize:13}}>✕</button>
+                        </div>
+                      )}
+                    </div>
+                    {!enEdit && (
+                      <div style={{display:"flex",gap:5}}>
+                        <button onClick={function(){setEditIngP(function(p){return Object.assign({},p,{[nom]:pAct||""});});}} style={{background:pAct?"#EDE9FE":"#f3f4f6",color:pAct?"#7C3AED":"#6b7280",border:"none",borderRadius:8,padding:"7px 12px",cursor:"pointer",fontSize:12,fontWeight:700}}>{pAct?"✏️":"+ Prix"}</button>
+                        {pAct && <button onClick={function(){setPrixIngs(function(p){var n=Object.assign({},p);delete n[nom];fbSave("config","prixIngs",n);return n;});}} style={{background:"#FEE2E2",color:"#EF4444",border:"none",borderRadius:8,padding:"7px 8px",cursor:"pointer",fontSize:12}}>✕</button>}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{marginTop:14,fontSize:12,color:"#6b7280",paddingTop:12,borderTop:"1px solid #e5e7eb"}}>
+              {Object.keys(prixIngs).length} ingrédient{Object.keys(prixIngs).length>1?"s":""} avec prix défini{Object.keys(prixIngs).length>1?"s":""}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Formules std ── */}
+      {tab==="inventaire" && (
+      <InventaireTab
+        mats={mats}
+        achats={achats}
+        setAchats={setAchats}
+        orders={orders}
+        customFmls={customFmls}
+        gc={gc}
+        card={card}
+        fmt={fmt}
+      />
+    )}
+
+        {tab==="formules" && (
+        <div>
+          <p style={{fontSize:12,color:"#6b7280",marginBottom:14,background:"#f0faf0",borderRadius:10,padding:"8px 14px"}}>
+            ✏️ Modifiez directement les quantités (kg) dans le tableau — les coûts se recalculent en temps réel.
+          </p>
+          <div style={{display:"grid",gap:16}}>
+          {FMLS.map(function(f){
+            var compoActif = (customFmls[f.id]&&customFmls[f.id].compo) ? customFmls[f.id].compo : f.compo;
+            var coutTotal  = calcP(f,mats,customFmls) + Number(mainOeuvre||0);
+            var modifie    = !!(customFmls[f.id]&&customFmls[f.id].compo);
+            return (
+              <div key={f.id} style={Object.assign({},card,{borderTop:"4px solid "+f.c,padding:0,overflow:"hidden"})}>
+                {/* En-tête */}
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"14px 18px",flexWrap:"wrap",gap:8}}>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <span style={{fontSize:28}}>{f.e}</span>
+                    <div>
+                      <div style={{display:"flex",alignItems:"center",gap:6}}>
+                        <span style={{fontWeight:700,fontSize:14,color:"#1a2e1a"}}>{f.nom}</span>
+                        {modifie && <span style={{background:"#FEF3C7",color:"#D97706",fontSize:10,padding:"2px 8px",borderRadius:10,fontWeight:700}}>✏️ Modifiée</span>}
+                      </div>
+                      <div style={{fontSize:11,color:"#6b7280"}}>{f.phase}</div>
+                    </div>
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <div style={{textAlign:"right",background:f.bg,borderRadius:10,padding:"8px 14px"}}>
+                      <div style={{fontSize:10,color:f.c,fontWeight:700}}>Coût / sac 50kg</div>
+                      <div style={{fontSize:18,fontWeight:800,color:f.c}}>{fmt(coutTotal)}</div>
+                      {mainOeuvre>0 && <div style={{fontSize:9,color:f.c,opacity:0.7}}>dont MO: {fmt(mainOeuvre)}</div>}
+                    </div>
+                    {modifie && (
+                      <button onClick={function(){
+                        setCustomFmls(function(prev){
+                          var n=Object.assign({},prev); delete n[f.id];
+                          fbSave("config","customFmls",n); return n;
+                        });
+                      }} style={{background:"#FEE2E2",color:"#EF4444",border:"none",borderRadius:8,padding:"6px 12px",cursor:"pointer",fontSize:11,fontWeight:700}}>
+                        ↩ Réinitialiser
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Tableau éditable */}
+                <div style={{overflowX:"auto"}}>
+                  <table style={{width:"100%",borderCollapse:"collapse"}}>
+                    <thead>
+                      <tr style={{background:f.bg}}>
+                        <th style={{padding:"8px 14px",textAlign:"left",fontSize:11,color:f.c,fontWeight:700,borderBottom:"2px solid "+f.c+"33"}}>Ingrédient</th>
+                        <th style={{padding:"8px 14px",textAlign:"center",fontSize:11,color:f.c,fontWeight:700,borderBottom:"2px solid "+f.c+"33"}}>Quantité (kg)</th>
+                        <th style={{padding:"8px 14px",textAlign:"right",fontSize:11,color:f.c,fontWeight:700,borderBottom:"2px solid "+f.c+"33"}}>Prix/kg</th>
+                        <th style={{padding:"8px 14px",textAlign:"right",fontSize:11,color:f.c,fontWeight:700,borderBottom:"2px solid "+f.c+"33"}}>Coût</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(compoActif).map(function(e2, idx){
+                        var matId=e2[0], qty=e2[1];
+                        var mat = mats.find(function(m){return m.id===matId;});
+                        if(!mat) return null;
+                        var estModifie = modifie && customFmls[f.id].compo[matId]!==f.compo[matId];
+                        return (
+                          <tr key={matId} style={{background:idx%2===0?"#fff":"#fafafa",borderBottom:"1px solid #f0f0f0"}}>
+                            <td style={{padding:"8px 14px",fontWeight:600,fontSize:13,color:"#1a2e1a"}}>{mat.nom}</td>
+                            <td style={{padding:"6px 10px",textAlign:"center"}}>
+                              <input
+                                type="number" min="0" step="0.01"
+                                value={qty}
+                                onChange={function(e){
+                                  var nv = parseFloat(e.target.value)||0;
+                                  setCustomFmls(function(prev){
+                                    var n  = Object.assign({},prev);
+                                    var fc = Object.assign({},n[f.id]||{});
+                                    var co = Object.assign({},compoActif);
+                                    co[matId] = nv;
+                                    fc.compo  = co;
+                                    n[f.id]   = fc;
+                                    fbSave("config","customFmls",n);
+                                    return n;
+                                  });
+                                }}
+                                style={{width:80,border:"2px solid "+(estModifie?f.c:"#e2e8e2"),borderRadius:8,padding:"6px 8px",fontSize:14,fontWeight:700,textAlign:"center",outline:"none",background:estModifie?f.bg:"#fff",color:"#1a2e1a"}}
+                              />
+                            </td>
+                            <td style={{padding:"8px 14px",textAlign:"right",fontSize:12,color:"#6b7280"}}>{mat.p.toLocaleString("fr-FR")} F</td>
+                            <td style={{padding:"8px 14px",textAlign:"right",fontWeight:700,fontSize:13,color:estModifie?f.c:"#374151"}}>{Math.round(qty*mat.p).toLocaleString("fr-FR")} F</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{background:f.c}}>
+                        <td colSpan={3} style={{padding:"10px 14px",color:"#fff",fontWeight:700,fontSize:13}}>TOTAL / SAC 50 kg</td>
+                        <td style={{padding:"10px 14px",textAlign:"right",color:"#fff",fontWeight:800,fontSize:15}}>{fmt(coutTotal)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            );
+          })}
+          </div>
+        </div>
+      )}
+
+      {/* ── Excel ── */}
+      {tab==="excel" && (
+        <div>
+          <div style={Object.assign({},card,{background:"linear-gradient(135deg,#0d2b0d,#2d6e2d)",textAlign:"center",padding:30})}>
+            <div style={{fontSize:48,marginBottom:10}}>📥</div>
+            <h2 style={{color:"#fff",marginBottom:6,fontSize:20}}>Télécharger le fichier Excel du jour</h2>
+            <p style={{color:"#86efac",fontSize:12,marginBottom:20,lineHeight:1.6}}>Prix actuels · Commandes du jour · Registre complet — 3 feuilles</p>
+            <button onClick={function(){try{dlExcel(mats,orders,moulin.nom,moulin.ville);setXlMsg("✅ Téléchargé !");}catch(e){setXlMsg("❌ Erreur.");}setTimeout(function(){setXlMsg("");},3000);}} style={{background:"#fff",color:gc,border:"none",borderRadius:12,padding:"12px 32px",fontWeight:700,fontSize:14,cursor:"pointer",boxShadow:"0 4px 16px rgba(0,0,0,0.3)"}}>
+              ⬇️ Générer & Télécharger
+            </button>
+            {xlMsg && <div style={{marginTop:12,background:"rgba(255,255,255,0.18)",borderRadius:8,padding:"8px 16px",color:"#fff",fontWeight:700,fontSize:13}}>{xlMsg}</div>}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:12}}>
+            {[["📊","Calcul Aliments","Prix du jour + coût par formule"],["📅","Journal Journalier","Commandes du jour + récapitulatif"],["📦","Registre complet","Toutes les commandes + totaux"]].map(function(r){
+              return <div key={r[1]} style={card}><div style={{fontSize:26,marginBottom:7}}>{r[0]}</div><div style={{fontWeight:700,fontSize:13,marginBottom:4}}>{r[1]}</div><div style={{fontSize:11,color:"#6b7280"}}>{r[2]}</div></div>;
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ── QR Code ── */}
+      {tab==="qr" && (
+        <div>
+          <h2 style={{fontSize:20,marginBottom:4,color:"#1a2e1a",fontWeight:700}}>📱 QR Code de Commande</h2>
+          <p style={{color:"#9ca3af",fontSize:12,marginBottom:18}}>Affichez ce QR code — vos clients le scannent pour commander directement.</p>
+          <div style={{display:"flex",gap:18,flexWrap:"wrap",alignItems:"flex-start"}}>
+            <div style={Object.assign({},card,{textAlign:"center",width:290,flexShrink:0})}>
+              <div style={{fontWeight:700,fontSize:15,color:"#1a2e1a",marginBottom:4}}>📱 QR Code du moulin</div>
+              <div style={{fontSize:11,color:"#9ca3af",marginBottom:16}}>Scannable depuis n'importe quel téléphone</div>
+              <div style={{background:"linear-gradient(135deg,#0d2b0d,"+gc+")",borderRadius:16,padding:14,display:"inline-block",marginBottom:12}}>
+                <div style={{background:"#fff",borderRadius:8,padding:8,display:"inline-block"}}>
+                  <img src={qrSrc} alt="QR Code" width="230" height="230" style={{display:"block",borderRadius:4}}/>
+                </div>
+              </div>
+              <div style={{marginBottom:16}}>
+                <div style={{fontWeight:700,fontSize:14,color:"#1a2e1a"}}>{moulin.nom}</div>
+                {moulin.ville && <div style={{fontSize:11,color:"#9ca3af"}}>📍 {moulin.ville}</div>}
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                <button onClick={printQR} style={Object.assign({},mkBtn(),{width:"100%",padding:11})}>🖨️ Imprimer la carte client</button>
+                <div style={{display:"flex",gap:8}}>
+                  <button onClick={function(){window.open(qrSrc,"_blank");}} style={Object.assign({},mkBtnO(),{flex:1,padding:"9px",fontSize:12})}>⬇️ Voir PNG</button>
+                  <button onClick={function(){if(navigator.clipboard){navigator.clipboard.writeText(appUrl).then(function(){setQrCop(true);setTimeout(function(){setQrCop(false);},2500);});}}} style={{flex:1,background:qrCop?"#059669":"#fff",color:qrCop?"#fff":"#374151",border:"2px solid "+(qrCop?"#059669":"#e2e8e2"),borderRadius:10,padding:"9px",cursor:"pointer",fontWeight:700,fontSize:12}}>
+                    {qrCop?"✅ Copié !":"📋 Lien"}
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div style={{flex:1,minWidth:240}}>
+              <div style={card}>
+                <h3 style={{marginBottom:14,color:"#1a2e1a",fontSize:14}}>📲 Comment ça marche ?</h3>
+                {[["1","📷","Le client scanne le QR code","Il ouvre son appareil photo et pointe vers le code"],["2","🌐","L'app s'ouvre directement","Il arrive sur la page de commande du moulin"],["3","📦","Il passe sa commande","Choisit l'aliment, sacs, donne ses infos"],["4","✅","Vous recevez la commande","Elle apparaît dans l'Espace Employé en temps réel"]].map(function(r){
+                  return (
+                    <div key={r[0]} style={{display:"flex",gap:10,marginBottom:12,alignItems:"flex-start"}}>
+                      <div style={{background:gc,color:"#fff",borderRadius:"50%",width:26,height:26,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:12,flexShrink:0}}>{r[0]}</div>
+                      <div><div style={{fontWeight:700,fontSize:13,marginBottom:1}}>{r[1]} {r[2]}</div><div style={{fontSize:11,color:"#6b7280"}}>{r[3]}</div></div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={card}>
+                <div style={{fontWeight:700,fontSize:13,color:"#1a2e1a",marginBottom:8}}>🔗 Lien direct à partager</div>
+                <div style={{background:"#f9fafb",border:"1px solid #e5e7eb",borderRadius:8,padding:"9px 12px",fontSize:11,color:"#6b7280",wordBreak:"break-all",lineHeight:1.6,marginBottom:10}}>{appUrl}</div>
+                <button onClick={function(){if(navigator.clipboard){navigator.clipboard.writeText(appUrl).then(function(){setQrCop(true);setTimeout(function(){setQrCop(false);},2500);});}}} style={Object.assign({},mkBtn(qrCop?"#059669":gc),{width:"100%",padding:10,fontSize:13})}>
+                  {qrCop?"✅ Lien copié !":"📋 Copier le lien"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Config ── */}
+      {tab==="config" && (
+        <div style={card}>
+          <h3 style={{marginBottom:18,color:"#1a2e1a"}}>⚙️ Paramètres du Moulin</h3>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+            <div><label style={lbl}>Nom du moulin</label><input style={inp} value={cfg.nom} onChange={function(e){setCfg(Object.assign({},cfg,{nom:e.target.value}));}}/></div>
+            <div><label style={lbl}>Téléphone</label><input style={inp} value={cfg.tel} onChange={function(e){setCfg(Object.assign({},cfg,{tel:e.target.value}));}}/></div>
+          </div>
+          <div style={{marginBottom:16}}><label style={lbl}>Ville</label><input style={inp} value={cfg.ville} onChange={function(e){setCfg(Object.assign({},cfg,{ville:e.target.value}));}}/></div>
+          <div style={{marginBottom:22}}>
+            <label style={lbl}>Couleur principale</label>
+            <div style={{display:"flex",gap:9}}>
+              {["#2d6e2d","#C2410C","#1d4ed8","#7C3AED","#0f766e","#b45309"].map(function(c){
+                return <div key={c} onClick={function(){setCfg(Object.assign({},cfg,{couleur:c}));}} style={{width:34,height:34,borderRadius:"50%",background:c,cursor:"pointer",border:cfg.couleur===c?"3px solid #111":"3px solid transparent",boxShadow:cfg.couleur===c?"0 0 0 2px #fff, 0 0 0 4px "+c:"none"}}/>;
+              })}
+            </div>
+          </div>
+          <button style={Object.assign({},mkBtn(cfg.couleur||gc),{minWidth:150})} onClick={function(){var nm=Object.assign({},cfg);setMoulin(nm);fbSave("config","moulin",nm);setCfgOk(true);setTimeout(function(){setCfgOk(false);},2500);}}>
+            {cfgOk?"✅ Sauvegardé !":"💾 Enregistrer"}
+          </button>
+          <hr style={{border:"none",borderTop:"1px solid #e5e7eb",margin:"18px 0"}}/>
+
+          {/* Main d'oeuvre */}
+          <div style={{background:"#f0faf0",borderRadius:16,padding:"18px",marginBottom:18}}>
+            <h4 style={{color:"#1a2e1a",marginBottom:4,fontSize:14}}>👷 Main d'œuvre par sac</h4>
+            <p style={{fontSize:12,color:"#6b7280",marginBottom:10}}>Montant ajouté au coût de chaque sac dans les formules standard.</p>
+            <div style={{display:"flex",gap:8,alignItems:"center"}}>
+              <input type="number" min="0" step="100"
+                style={{flex:1,border:"2px solid #c6e6c6",borderRadius:10,padding:"10px 12px",fontSize:15,outline:"none"}}
+                value={mainOeuvre}
+                onChange={function(e){
+                  var v = Number(e.target.value)||0;
+                  setMainOeuvre(v);
+                  fbSave("config","mainOeuvre",{val:v});
+                }}/>
+              <span style={{fontSize:13,fontWeight:700,color:"#2d6e2d"}}>FCFA</span>
+            </div>
+          </div>
+
+          {/* Changer le code d'accès employé */}
+          <div style={{background:"#f0faf0",borderRadius:16,padding:"18px",marginBottom:18}}>
+            <h4 style={{color:"#1a2e1a",marginBottom:4,fontSize:14}}>🔐 Code d'accès Espace Employé</h4>
+            <p style={{fontSize:12,color:"#6b7280",marginBottom:12}}>Changez le code pour que vos clients ne puissent pas entrer ici.</p>
+            <PinChanger employeePin={employeePin} setEmployeePin={setEmployeePin} gc={gc}/>
+          </div>
+
+          <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+            <button onClick={function(){setAdminOk(false);goHome();}} style={{background:"#fff",color:"#ef4444",border:"2px solid #ef4444",borderRadius:10,padding:"10px 18px",cursor:"pointer",fontWeight:700,fontSize:13}}>
+              🚪 Déconnexion employé
+            </button>
+            <button onClick={function(){lsSet("lic_code","");lsSet("lic_data",null);setLicOk(false);}} style={{background:"#fff",color:"#9ca3af",border:"2px solid #e5e7eb",borderRadius:10,padding:"10px 18px",cursor:"pointer",fontWeight:700,fontSize:13}}>
+              🔑 Changer de licence
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div style={{height:24}}/>
+    </PageWrap>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+<script>
+// ── Service Worker (PWA hors ligne) ──────────────────────────
+if("serviceWorker" in navigator) {
+  var SW_CODE = `
+const CACHE = "agrifeed-v2";
+const FILES = ["/"];
+
+self.addEventListener("install", function(e) {
+  e.waitUntil(
+    caches.open(CACHE).then(function(cache) {
+      return cache.addAll(FILES);
+    })
+  );
+  self.skipWaiting();
+});
+
+self.addEventListener("activate", function(e) {
+  e.waitUntil(
+    caches.keys().then(function(keys) {
+      return Promise.all(keys.filter(function(k){ return k!==CACHE; }).map(function(k){ return caches.delete(k); }));
+    })
+  );
+  self.clients.claim();
+});
+
+self.addEventListener("fetch", function(e) {
+  // Ne pas intercepter Firebase et CDN
+  var url = e.request.url;
+  if(url.includes("firebase") || url.includes("googleapis") || url.includes("gstatic") || url.includes("cdnjs")) {
+    return;
+  }
+  e.respondWith(
+    fetch(e.request).then(function(response) {
+      var clone = response.clone();
+      caches.open(CACHE).then(function(cache){ cache.put(e.request, clone); });
+      return response;
+    }).catch(function() {
+      return caches.match(e.request).then(function(cached){
+        return cached || caches.match("/");
+      });
+    })
+  );
+});
+`;
+  var blob = new Blob([SW_CODE], {type:"application/javascript"});
+  var swUrl = URL.createObjectURL(blob);
+  navigator.serviceWorker.register(swUrl, {scope:"/"}).then(function(reg){
+    console.log("✅ Service Worker enregistré");
+  }).catch(function(err){
+    console.warn("SW non supporté ici:", err.message);
+  });
+}
+
+// ── Prompt installation PWA ───────────────────────────────────
+var deferredPrompt = null;
+window.addEventListener("beforeinstallprompt", function(e) {
+  e.preventDefault();
+  deferredPrompt = e;
+  // Afficher bouton installer après 3 secondes
+  setTimeout(function() {
+    var btn = document.getElementById("pwa-install-btn");
+    if(btn) btn.style.display = "flex";
+  }, 3000);
+});
+
+window.addEventListener("appinstalled", function() {
+  var btn = document.getElementById("pwa-install-btn");
+  if(btn) btn.style.display = "none";
+  deferredPrompt = null;
+});
+
+function installPWA() {
+  if(deferredPrompt) {
+    deferredPrompt.prompt();
+    deferredPrompt.userChoice.then(function(){ deferredPrompt = null; });
+  }
+}
+</script>
+
+<!-- Bouton flottant "Installer l'app" -->
+<div id="pwa-install-btn" onclick="installPWA()" style="display:none;position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:linear-gradient(135deg,#0d2b0d,#2d6e2d);color:#fff;border:none;borderRadius:30px;padding:12px 24px;cursor:pointer;fontWeight:700;fontSize:14px;boxShadow:0 4px 20px rgba(0,0,0,0.4);zIndex:9999;align-items:center;gap:10px;white-space:nowrap;border-radius:30px;">
+  <span style="font-size:20px">📲</span>
+  <span>Installer AgriFeed Pro</span>
+</div>
+
+</body>
+</html>
